@@ -357,6 +357,9 @@ def readme_summary(text: str, max_chars: int = 400) -> str:
             continue
         if line.startswith(("#", ">", "---", "===", "|", "<!--")):
             continue
+        line = re.sub(r"<[^>]+>", " ", line)          # README badges and banners
+        if not line.strip() or line.strip().startswith(("![", "[!")):
+            continue
         if re.fullmatch(r"[\[!\]\(\)\w\s/:.\-=?&+#]*", line) and line.count("](") >= 2:
             continue  # badge row
         line = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", line)

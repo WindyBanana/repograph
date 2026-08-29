@@ -28,6 +28,7 @@ class Rule:
     confidence: str = "medium"
     remediation: str = ""
     category: str = "code"
+    once_per_file: bool = False
     references: List[str] = field(default_factory=list)
     _compiled: Optional[re.Pattern] = None
 
@@ -185,7 +186,7 @@ RULES: List[Rule] = [
          "medium", "CWE-532", confidence="low",
          remediation="Redact credentials before logging."),
     Rule("wildcard-bind", "Service binds to all interfaces",
-         r"(?:0\.0\.0\.0|::)\s*[:'\"]?\s*(?:\d{2,5})?|host\s*=\s*['\"]0\.0\.0\.0['\"]",
+         r"""(?:["'](?:0\.0\.0\.0|\[::\])["']|\b0\.0\.0\.0:\d{2,5}|--host[= ]0\.0\.0\.0)""",
          "low", "CWE-1327", confidence="low", files=r"\.(py|js|ts|go|java|cs|yml|yaml)$",
          remediation="Bind to localhost unless the process is meant to be reachable from the network."),
     # -------------------------------------------------------- dockerfile/k8s
@@ -240,17 +241,38 @@ RULES: List[Rule] = [
     Rule("env-committed", "Environment file with real values committed",
          r"(?i)^\s*[A-Z][A-Z0-9_]*\s*=\s*\S+", "high", "CWE-540",
          files=r"(^|/)\.env(\.\w+)?$", not_files=r"(example|sample|template|dist)",
-         category="config",
+         category="config", once_per_file=True,
          remediation="Remove the file from version control, rotate the values and add it to .gitignore."),
 ]
 
 _INFRA_WHOLE_FILE = {"docker-root", "k8s-no-limits"}
 
 
+_PY_DOCSTRING = re.compile(r'("""|\'\'\')(?:.|\n)*?\1')
+
+
+def _docstring_spans(rel: str, text: str) -> List[tuple]:
+    """Documentation is full of illustrative bad code; it is not the code."""
+    if not rel.endswith((".py", ".pyi")):
+        return []
+    return [(m.start(), m.end()) for m in _PY_DOCSTRING.finditer(text)]
+
+
+def _inside(spans: Sequence[tuple], index: int) -> bool:
+    return any(start <= index < end for start, end in spans)
+
+
+_FIXTURE_PATH = re.compile(
+    r"(?i)(^|/)(tests?|spec|specs|fixtures?|mocks?|examples?|samples?|testdata|__tests__)(/|$)"
+)
+
+
 def scan_patterns(rel: str, text: str, language: str, max_per_rule: int = 5) -> Iterator[Finding]:
     if not text:
         return
     lines = text.splitlines()
+    fixture = bool(_FIXTURE_PATH.search(rel))
+    doc_spans = _docstring_spans(rel, text)
     for rule in RULES:
         if not rule.applies(rel, language):
             continue
@@ -260,17 +282,18 @@ def scan_patterns(rel: str, text: str, language: str, max_per_rule: int = 5) -> 
             continue
         if rule.id in _INFRA_WHOLE_FILE:
             if _whole_file_hit(rule, text):
-                yield _finding(rule, rel, 1, lines[0].strip()[:200] if lines else "")
+                yield _finding(rule, rel, 1, lines[0].strip()[:200] if lines else "", fixture)
             continue
         count = 0
+        limit = 1 if rule.once_per_file else max_per_rule
         for match in pattern.finditer(text):
             line_no = text.count("\n", 0, match.start()) + 1
             line = lines[line_no - 1].strip() if line_no - 1 < len(lines) else ""
-            if _is_comment(line, language):
+            if _is_comment(line, language) or _inside(doc_spans, match.start()):
                 continue
-            yield _finding(rule, rel, line_no, line[:200])
+            yield _finding(rule, rel, line_no, line[:200], fixture)
             count += 1
-            if count >= max_per_rule:
+            if count >= limit:
                 break
 
 
@@ -296,18 +319,30 @@ def _is_comment(line: str, language: str) -> bool:
     return line.startswith(prefixes)
 
 
-def _finding(rule: Rule, rel: str, line: int, snippet: str) -> Finding:
+_SEVERITY_ORDER = ["critical", "high", "medium", "low", "info"]
+
+
+def _downgrade(severity: str) -> str:
+    index = _SEVERITY_ORDER.index(severity) if severity in _SEVERITY_ORDER else 2
+    return _SEVERITY_ORDER[min(index + 1, len(_SEVERITY_ORDER) - 1)]
+
+
+def _finding(rule: Rule, rel: str, line: int, snippet: str, fixture: bool = False) -> Finding:
+    # A committed .env under tests/ is a fixture, not a production leak — worth
+    # reporting, not worth waking anyone up for.
+    severity = _downgrade(rule.severity) if fixture and rule.category in ("config", "secret") \
+        else rule.severity
     return Finding(
         id=slug("rule", rule.id, rel, str(line)),
         title=rule.title,
-        severity=rule.severity,
+        severity=severity,
         category=rule.category,
         file=rel,
         line=line,
         snippet=snippet,
         cwe=rule.cwe,
         identifier=f"RG-{rule.id.upper()}",
-        confidence=rule.confidence,
+        confidence="low" if fixture and rule.confidence != "high" else rule.confidence,
         remediation=rule.remediation,
         references=list(rule.references),
     )

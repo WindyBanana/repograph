@@ -75,11 +75,35 @@ _SKIP_FILES = re.compile(
 _ENV_EXAMPLE = re.compile(r"(?i)\.env\.(example|sample|template|dist)$|(^|/)env\.example$")
 
 
-def _looks_placeholder(value: str, strict: bool = False) -> bool:
+_QUOTED = re.compile(r"""['"]([^'"\n]{4,})['"]""")
+
+
+def _secret_value(matched: str) -> str:
+    """The credential itself, not the assignment around it."""
+    quoted = _QUOTED.findall(matched)
+    return quoted[-1] if quoted else matched
+
+
+def _looks_placeholder(text: str, strict: bool = False, is_value: bool = False) -> bool:
+    """``strict`` narrows the vocabulary for structurally unmistakable tokens;
+    ``is_value`` enables checks that only make sense on the secret itself."""
     pattern = _STRICT_PLACEHOLDER if strict else _PLACEHOLDER
-    if pattern.search(value):
+    if pattern.search(text):
         return True
-    return len(set(value)) <= 4
+    if is_value and not strict:
+        # "SECRET_KEY = 'development key'" is prose, not a credential.
+        if " " in text.strip().strip("\"'"):
+            return True
+    return len(set(text)) <= 4
+
+
+_PY_DOCSTRING = re.compile(r'("""|\'\'\')(?:.|\n)*?\1')
+
+
+def _docstring_spans(rel: str, text: str) -> List[tuple]:
+    if not rel.endswith((".py", ".pyi")):
+        return []
+    return [(m.start(), m.end()) for m in _PY_DOCSTRING.finditer(text)]
 
 
 def scan_secrets(rel: str, text: str, app: str = "") -> Iterator[Finding]:
@@ -87,23 +111,25 @@ def scan_secrets(rel: str, text: str, app: str = "") -> Iterator[Finding]:
         return
     is_low_signal = bool(_SKIP_FILES.search(rel))
     lines = text.splitlines()
+    doc_spans = _docstring_spans(rel, text)
     seen: set = set()
 
     for rid, title, pattern, severity, confidence in _COMPILED:
         for match in pattern.finditer(text):
-            value = match.group(0)
+            value = _secret_value(match.group(0))
             line_no = text.count("\n", 0, match.start()) + 1
             if line_no - 1 >= len(lines):
                 continue
             line = lines[line_no - 1]
             # High-confidence rules judge the matched value; the loose
             # "password = ..." rule also weighs the surrounding line.
-            if _looks_placeholder(value, strict=confidence == "high") and rid != "private-key":
+            if _looks_placeholder(value, strict=confidence == "high", is_value=True) \
+                    and rid != "private-key":
                 continue
             if confidence != "high" and _looks_placeholder(line):
                 continue
             key = (rid, line_no)
-            if key in seen:
+            if key in seen or any(start <= match.start() < end for start, end in doc_spans):
                 continue
             seen.add(key)
             sev = severity
@@ -128,7 +154,7 @@ def scan_secrets(rel: str, text: str, app: str = "") -> Iterator[Finding]:
 
     for match in _HIGH_ENTROPY_ASSIGN.finditer(text):
         name, value = match.group(1), match.group(2)
-        if _looks_placeholder(value) or shannon_entropy(value) < 4.0:
+        if _looks_placeholder(value, is_value=True) or shannon_entropy(value) < 4.0:
             continue
         line_no = text.count("\n", 0, match.start()) + 1
         if ("entropy", line_no) in seen or any(k[1] == line_no for k in seen):

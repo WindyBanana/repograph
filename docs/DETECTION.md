@@ -85,8 +85,9 @@ Jenkinsfiles — plus every environment variable the code reads.
 AWS keys, GitHub/GitLab/Slack/npm/SendGrid/Stripe/Google/OpenAI/Anthropic tokens, private keys,
 JWTs, Azure storage keys, database URLs containing a password, hardcoded password/secret
 assignments, basic-auth and bearer headers, and high-entropy values assigned to
-key/token/secret-shaped names. Findings are redacted in the output, downgraded in test and example
-files, and suppressed for obvious placeholders.
+key/token/secret-shaped names. Findings are redacted in the output, downgraded in test, fixture, example and
+documentation files, skipped inside Python docstrings, and suppressed when the value is an obvious
+placeholder or reads as prose ("development key") rather than a credential.
 
 ### Code patterns (with CWE)
 
@@ -97,6 +98,9 @@ ciphers (CWE-327), insecure randomness (CWE-338), disabled TLS verification (CWE
 HTTP (CWE-319), JWT verification weakened (CWE-347), debug mode enabled (CWE-489), world-writable
 permissions (CWE-732), path traversal (CWE-22), SSRF (CWE-918), open redirect (CWE-601), mass
 assignment (CWE-915), authentication disabled (CWE-306), secrets in logs (CWE-532).
+
+Rules that describe a property of a whole file (a committed `.env`, a container with no `USER`)
+report once per file rather than once per line.
 
 ### Infrastructure rules
 
