@@ -5,6 +5,7 @@ from __future__ import annotations
 import curses
 import json
 import os
+import webbrowser
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Tuple
 
@@ -308,6 +309,7 @@ class Tui:
             self._handle(key, stdscr)
 
     def _handle(self, key: int, stdscr) -> None:
+        self.message = ""
         rows = self.rows()
         height = max(4, stdscr.getmaxyx()[0] - 8)
         if key in (curses.KEY_DOWN, ord("j")):
@@ -339,8 +341,23 @@ class Tui:
             self.search = ""
         elif key == ord("d"):
             self.show_detail = not self.show_detail
+        elif key == ord("o"):
+            self._open_report()
         elif key == ord("?"):
             self._help(stdscr)
+
+    def _open_report(self) -> None:
+        """Hand the full graphical report to whatever can display it."""
+        index = os.path.join(self.output_dir, "index.html") if self.output_dir else ""
+        if not index or not os.path.isfile(index):
+            self.message = "no rendered report alongside this scan — run: repograph scan <path>"
+            return
+        try:
+            opened = webbrowser.open(f"file://{os.path.abspath(index)}")
+        except Exception:
+            opened = False
+        self.message = (f"opened {index}" if opened
+                        else f"could not open a browser — the report is at {index}")
 
     def _init_colours(self) -> None:
         if not curses.has_colors():
@@ -413,15 +430,17 @@ class Tui:
             for line, text in enumerate(selected.detail[: detail_height - 1]):
                 self._add(stdscr, 4 + list_height + line, 2, text, curses.color_pair(PAIR_MUTED))
 
-        if self.search_mode:
+        if self.message:
+            status = f" {self.message}"
+        elif self.search_mode:
             status = f" /{self.search}"
         elif self.search:
             status = (f" filter:{self.search}  {len(rows)} match(es)  "
                       f"[{self.cursor + 1}/{len(rows)}]  / search  d detail  q quit")
         else:
             status = (f" {VIEWS[self.view_index].title}  [{self.cursor + 1 if rows else 0}/{len(rows)}]"
-                      f"  ←/→ views  / search  d detail  ? help  q quit")
-        if self.output_dir:
+                      f"  ←/→ views  / search  d detail  o report  ? help  q quit")
+        if self.output_dir and not self.message:
             status += f"  ·  {self.output_dir}"
         self._add(stdscr, height - 1, 0, status.ljust(width - 1),
                   curses.color_pair(PAIR_HEADER))
@@ -438,6 +457,7 @@ class Tui:
             "  1..0           jump to a view",
             "  /              filter the current view (Esc clears)",
             "  d              toggle the detail pane",
+            "  o              open the full graphical report in a browser",
             "  ?              this help",
             "  q              quit",
             "",

@@ -51,6 +51,18 @@ class UiHarness:
         with urllib.request.urlopen(request, timeout=10) as response:
             return response.status, response.read()
 
+    def get_with_cookie(self, path, cookie):
+        request = urllib.request.Request(
+            self.url(path, with_token=False),
+            headers={"Cookie": f"{ui_server.COOKIE_NAME}={cookie}"})
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return response.status, response.read()
+
+    def page_cookie(self):
+        with urllib.request.urlopen(self.url("/", with_token=False), timeout=10) as response:
+            raw = response.headers.get("Set-Cookie") or ""
+        return raw.split(";")[0].partition("=")[2]
+
     def post(self, path, payload):
         request = urllib.request.Request(
             self.url(path), data=json.dumps(payload).encode(),
@@ -129,6 +141,17 @@ class TestUiServer(unittest.TestCase):
             _, report = self.ui.get("/report/index.html")
             self.assertIn(b"repograph", report)
 
+            # The report links to its siblings with plain relative hrefs. Those
+            # requests carry no token, so they must be served off the cookie or
+            # every diagram, CSV and document in the report is a dead link.
+            cookie = self.ui.page_cookie()
+            self.assertEqual(cookie, self.ui.token)
+            for sibling in ("AI-REPORT.md", "BUSINESS-OVERVIEW.md",
+                            "data/findings.csv", "repograph.json"):
+                status, body = self.ui.get_with_cookie(f"/report/{sibling}", cookie)
+                self.assertEqual(status, 200, sibling)
+                self.assertTrue(body, sibling)
+
     def test_the_report_route_refuses_paths_outside_the_output(self):
         with self.assertRaises(urllib.error.HTTPError) as caught:
             self.ui.get("/report/../../../../etc/passwd")
@@ -145,6 +168,61 @@ class TestUiServer(unittest.TestCase):
             time.sleep(0.2)
         self.assertEqual(snapshot["state"], "error")
         self.assertIn("not a folder", snapshot["error"])
+
+
+class TestReportCookie(unittest.TestCase):
+    """The cookie may read a rendered report and nothing else."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.ui = UiHarness()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.ui.stop()
+
+    def test_the_page_hands_out_a_samesite_cookie(self):
+        with urllib.request.urlopen(self.ui.url("/", with_token=False), timeout=10) as response:
+            raw = response.headers.get("Set-Cookie") or ""
+        self.assertIn(ui_server.COOKIE_NAME, raw)
+        self.assertIn("SameSite=Strict", raw)
+        self.assertIn("HttpOnly", raw)
+
+    def test_the_cookie_does_not_unlock_the_api(self):
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            self.ui.get_with_cookie("/api/status", self.ui.token)
+        self.assertEqual(caught.exception.code, 403)
+
+    def test_a_wrong_cookie_is_refused(self):
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            self.ui.get_with_cookie("/report/index.html", "not-the-token")
+        self.assertEqual(caught.exception.code, 403)
+
+    def test_no_cookie_and_no_token_is_refused(self):
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            self.ui.get("/report/index.html", with_token=False)
+        self.assertEqual(caught.exception.code, 403)
+
+
+class TestDashboardPage(unittest.TestCase):
+    """The page must mount the report itself, not link away to it."""
+
+    def setUp(self):
+        from repograph_ui.assets import page
+        self.html = page("0.1.0", "a-token")
+
+    def test_it_embeds_the_report_in_a_frame(self):
+        self.assertIn('<iframe id="frame"', self.html)
+        self.assertIn("'#frame').src = reportUrl('index.html')", self.html)
+
+    def test_it_can_go_back_to_the_scan_form(self):
+        self.assertIn('id="back"', self.html)
+        self.assertIn("function leaveDashboard()", self.html)
+
+    def test_it_escapes_values_that_come_from_the_scan(self):
+        # repository names and paths land in the bar; they are not markup.
+        self.assertIn("function escapeHtml(", self.html)
+        self.assertNotIn("innerHTML = summary.name", self.html)
 
 
 class TestBundles(unittest.TestCase):

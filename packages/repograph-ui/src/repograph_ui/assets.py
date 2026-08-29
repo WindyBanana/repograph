@@ -76,6 +76,34 @@ ul.qs li { margin-bottom:5px; font-size:13px; }
 code { font-family:var(--mono); font-size:12.5px; background:var(--panel-2); padding:1px 5px;
        border-radius:5px; }
 footer { color:var(--faint); font-size:11.5px; text-align:center; padding:24px; }
+
+/* The dashboard takes the whole window once a scan finishes: the report is the
+   product, the scan form is only how you got here. */
+body.dash main, body.dash footer { display:none; }
+body.dash header { border-bottom:0; }
+#dash { display:none; flex-direction:column; height:calc(100vh - 59px); }
+body.dash #dash { display:flex; }
+.dashbar { display:flex; gap:14px; align-items:center; flex-wrap:wrap;
+           padding:10px 26px; border-bottom:1px solid var(--grid); background:var(--panel); }
+.dashbar .title { font-weight:650; font-size:14px; }
+.dashbar .what { color:var(--muted); font-size:12px; font-family:var(--mono);
+                 flex:1 1 180px; min-width:0;
+                 overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.chips { display:flex; gap:7px; flex-wrap:wrap; }
+.chip { font-size:11.5px; color:var(--muted); background:var(--bg); border:1px solid var(--grid);
+        border-radius:99px; padding:3px 10px; white-space:nowrap; }
+.chip b { color:var(--ink); font-weight:650; }
+.dashbar details { position:relative; }
+.dashbar summary { cursor:pointer; font-size:12.5px; color:var(--muted); list-style:none; }
+.dashbar summary::-webkit-details-marker { display:none; }
+.dashbar details[open] .menu { display:block; }
+.menu { display:none; position:absolute; right:0; top:24px; z-index:20; min-width:250px;
+        max-height:60vh; overflow:auto; background:var(--bg); border:1px solid var(--grid);
+        border-radius:10px; padding:8px; box-shadow:0 10px 30px rgba(15,23,42,.16); }
+.menu a { display:block; padding:6px 9px; border-radius:7px; text-decoration:none;
+          color:var(--ink); font-size:12.5px; font-family:var(--mono); }
+.menu a:hover { background:var(--panel-2); }
+#frame { flex:1; width:100%; border:0; background:var(--bg); }
 """
 
 JS = r"""
@@ -140,7 +168,7 @@ async function loadRecent() {
 async function startScan() {
   setError('');
   $('#scan').disabled = true;
-  $('#result').hidden = true;
+  leaveDashboard();
   $('#progress-panel').hidden = false;
   $('#log').textContent = '';
   try {
@@ -178,33 +206,70 @@ async function poll() {
   }
 }
 
+function escapeHtml(text) {
+  const box = document.createElement('div');
+  box.textContent = String(text ?? '');
+  return box.innerHTML;
+}
+
+// A full output path rarely fits the bar. Truncating from the right hides the
+// part that identifies it, and CSS direction:rtl relocates the leading slash, so
+// keep the last few segments and put the whole path in the tooltip.
+function shortPath(path) {
+  const parts = String(path).split(/[/\\]/).filter(Boolean);
+  if (parts.length <= 3) return path;
+  return '…/' + parts.slice(-3).join('/');
+}
+
+function reportUrl(name) {
+  return '/report/' + name + '?t=' + encodeURIComponent(TOKEN);
+}
+
 function showResult(status) {
   const summary = status.summary || {};
-  $('#result').hidden = false;
-  $('#result-title').textContent = summary.name + ' — ' + (summary.label || '');
-  $('#result-what').textContent = summary.what_it_is || '';
-  const cards = [
-    [summary.apps, 'Applications'], [summary.endpoints, 'Ways in'],
-    [summary.systems, 'Systems it needs'], [summary.findings, 'Issues found'],
-    [summary.files, 'Files'], [(summary.loc || 0).toLocaleString(), 'Lines of code'],
+  $('#dash-title').textContent = summary.name || 'Report';
+  $('#dash-where').textContent = shortPath(status.output_dir || '');
+  $('#dash-where').title = status.output_dir || '';
+  const chips = [
+    [summary.apps, 'applications'], [summary.endpoints, 'ways in'],
+    [summary.systems, 'systems'], [summary.findings, 'issues'],
+    [(summary.loc || 0).toLocaleString(), 'lines'],
   ];
-  $('#cards').innerHTML = cards.map(([value, label]) =>
-    '<div class="card"><div class="v">' + (value ?? 0) + '</div><div class="l">' + label +
-    '</div></div>').join('');
-  const base = '/report/';
-  const links = [['index.html', 'Open the report', 'primary']];
-  (status.documents || []).forEach((name) => links.push([name, name, '']));
-  $('#links').innerHTML = links.map(([href, label, cls]) =>
-    '<a class="' + cls + '" target="_blank" href="' + base + href + '?t=' +
-    encodeURIComponent(TOKEN) + '">' + label + '</a>').join('');
-  $('#questions').innerHTML = (status.questions || []).map((q) => '<li>' + q + '</li>').join('');
-  $('#ask-hint').innerHTML = 'Ask one with <code>repograph ask "…" -o ' +
-    (status.output_dir || '') + '</code>';
+  $('#chips').innerHTML = chips
+    .filter(([value]) => value !== undefined && value !== null)
+    .map(([value, label]) => '<span class="chip"><b>' + escapeHtml(value) + '</b> ' +
+      escapeHtml(label) + '</span>').join('');
+
+  const documents = status.documents || [];
+  $('#doc-menu').innerHTML =
+    '<a target="_blank" href="' + reportUrl('index.html') + '">Open in a separate window</a>' +
+    documents.map((name) => '<a target="_blank" href="' + reportUrl(name) + '">' +
+      escapeHtml(name) + '</a>').join('');
+
+  const questions = status.questions || [];
+  $('#ask-menu').innerHTML =
+    '<ul class="qs">' + questions.map((q) => '<li>' + escapeHtml(q) + '</li>').join('') + '</ul>' +
+    '<p class="small muted" style="padding:0 9px">Ask one with <code>repograph ask "…" -o ' +
+    escapeHtml(status.output_dir || '') + '</code></p>';
+  $('#ask-wrap').hidden = questions.length === 0;
+
+  // The report is self-contained; its sibling links authenticate with the
+  // SameSite cookie this page was served with.
+  $('#frame').src = reportUrl('index.html');
+  $('#progress-panel').hidden = true;
+  document.body.classList.add('dash');
   loadRecent();
+}
+
+function leaveDashboard() {
+  document.body.classList.remove('dash');
+  $('#frame').src = 'about:blank';
+  document.querySelectorAll('.dashbar details').forEach((node) => { node.open = false; });
 }
 
 document.addEventListener('DOMContentLoaded', () => {
   $('#scan').addEventListener('click', startScan);
+  $('#back').addEventListener('click', leaveDashboard);
   $('#browse').addEventListener('click', () => browse($('#path').value));
   $('#path').addEventListener('keydown', (event) => {
     if (event.key === 'Enter') startScan();
@@ -264,16 +329,22 @@ def page(version: str, token: str) -> str:
     <div class="log" id="log"></div>
   </div>
 
-  <div class="panel" id="result" hidden>
-    <h2 id="result-title"></h2>
-    <p class="small" id="result-what"></p>
-    <div class="cards" id="cards"></div>
-    <div class="links" id="links"></div>
-    <h2>Questions worth asking next</h2>
-    <ul class="qs" id="questions"></ul>
-    <p class="small muted" id="ask-hint"></p>
-  </div>
 </main>
+
+<div id="dash">
+  <div class="dashbar">
+    <button class="ghost" id="back">&larr; Scan another</button>
+    <span class="title" id="dash-title"></span>
+    <span class="what" id="dash-where"></span>
+    <span class="chips" id="chips"></span>
+    <details id="ask-wrap" hidden><summary>Questions to ask</summary>
+      <div class="menu" id="ask-menu"></div></details>
+    <details><summary>All files</summary>
+      <div class="menu" id="doc-menu"></div></details>
+  </div>
+  <iframe id="frame" title="repograph report" src="about:blank"></iframe>
+</div>
+
 <footer>repograph runs entirely on this machine. Close this window to stop the server.</footer>
 <script>window.__TOKEN__ = {token!r};</script>
 <script>{JS}</script>

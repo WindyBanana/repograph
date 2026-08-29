@@ -157,6 +157,9 @@ def run_scan(job: Job, request: Dict[str, Any]) -> None:
             job.error = f"{type(exc).__name__}: {exc}"
 
 
+COOKIE_NAME = "repograph_session"
+
+
 class Handler(http.server.BaseHTTPRequestHandler):
     server_version = f"repograph/{VERSION}"
     token = ""
@@ -166,22 +169,41 @@ class Handler(http.server.BaseHTTPRequestHandler):
         return
 
     # ---------------------------------------------------------------- guards
-    def _authorised(self, query: Dict[str, List[str]]) -> bool:
+    def _cookie_token(self) -> str:
+        raw = self.headers.get("Cookie") or ""
+        for part in raw.split(";"):
+            name, _, value = part.strip().partition("=")
+            if name == COOKIE_NAME:
+                return urllib.parse.unquote(value)
+        return ""
+
+    def _authorised(self, query: Dict[str, List[str]], allow_cookie: bool = False) -> bool:
+        # The report links to its own siblings with plain relative hrefs, so those
+        # requests cannot carry the token in the query. A SameSite=Strict cookie is
+        # never sent by another site, which is exactly the guarantee the token gives
+        # here — but it is only honoured for reading already-rendered files, never
+        # for the API or for starting a scan.
         supplied = (query.get("t") or [""])[0]
         if not secrets.compare_digest(supplied, self.token):
-            return False
+            if not (allow_cookie and secrets.compare_digest(self._cookie_token(), self.token)):
+                return False
         origin = self.headers.get("Origin")
         if origin and not origin.startswith(("http://127.0.0.1", "http://localhost")):
             return False
         host = (self.headers.get("Host") or "").split(":")[0]
         return host in ("127.0.0.1", "localhost", "")
 
-    def _send(self, code: int, body: bytes, content_type: str) -> None:
+    def _send(self, code: int, body: bytes, content_type: str, cookie: str = "") -> None:
         self.send_response(code)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
+        if cookie:
+            self.send_header(
+                "Set-Cookie",
+                f"{COOKIE_NAME}={urllib.parse.quote(cookie)}; Path=/; SameSite=Strict; HttpOnly",
+            )
         self.end_headers()
         try:
             self.wfile.write(body)
@@ -198,9 +220,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         path = parsed.path
 
         if path in ("/", "/index.html"):
-            self._send(200, page(VERSION, self.token).encode(), "text/html; charset=utf-8")
+            self._send(200, page(VERSION, self.token).encode(), "text/html; charset=utf-8",
+                       cookie=self.token)
             return
-        if not self._authorised(query):
+        if not self._authorised(query, allow_cookie=path.startswith("/report/")):
             self._send(403, b"forbidden", "text/plain; charset=utf-8")
             return
         if path == "/api/status":
