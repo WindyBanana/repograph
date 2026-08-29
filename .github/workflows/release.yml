@@ -152,29 +152,34 @@ jobs:
 
       - name: Write the release notes
         run: |
-          cat > notes.md <<'NOTES'
-          Standalone builds — no Python installation required. Each archive holds one
-          executable of about 9 MB with everything inside it.
+          set -euo pipefail
+          # Sizes come from the archives themselves; a hardcoded number goes stale
+          # the first time a dependency of the build changes.
+          size() { du -h "release/$1" 2>/dev/null | cut -f1 | tr -d ' ' || echo "?"; }
+          cat > notes.md <<NOTES
+          Standalone builds — no Python installation required. Each archive holds a
+          single executable with everything inside it.
 
-          | Platform | Download | How to run it |
-          |---|---|---|
-          | Windows | `repograph-windows-x86_64.zip` | double-click `repograph.exe` for the UI, or run it in a terminal for the CLI |
-          | macOS (Apple silicon) | `repograph-macos-arm64.zip` | double-click `repograph.app`, or `./repograph` in a terminal |
-          | macOS (Intel) | `repograph-macos-x86_64.zip` | as above |
-          | Linux | `repograph-linux-x86_64.tar.gz` | `./repograph`, or `./install.sh --binary ./repograph` for the launcher entry |
+          | Platform | Download | Size | How to run it |
+          |---|---|---|---|
+          | Windows | \`repograph-windows-x86_64.zip\` | $(size repograph-windows-x86_64.zip) | double-click \`repograph.exe\` for the UI, or run it in a terminal for the CLI |
+          | macOS (Apple silicon) | \`repograph-macos-arm64.zip\` | $(size repograph-macos-arm64.zip) | double-click \`repograph.app\`, or \`./repograph\` in a terminal |
+          | macOS (Intel) | \`repograph-macos-x86_64.zip\` | $(size repograph-macos-x86_64.zip) | as above |
+          | Linux | \`repograph-linux-x86_64.tar.gz\` | $(size repograph-linux-x86_64.tar.gz) | \`./repograph\`, or \`./install.sh --binary ./repograph\` for the launcher entry |
 
           Every build was smoke-tested in CI by scanning the bundled sample monorepo and
           asserting it produced the full report, PDF, workbook, deck and SBOM.
 
-          Verify a download against its `.sha256` file.
+          Verify a download against its \`.sha256\` file.
 
           **Unsigned.** These binaries are not code-signed, so:
-          - macOS: right-click the app and choose Open, or `xattr -dr com.apple.quarantine repograph.app`
+          - macOS: right-click the app and choose Open, or \`xattr -dr com.apple.quarantine repograph.app\`
           - Windows: SmartScreen → More info → Run anyway
 
           Installing from source stays available and needs nothing but Python 3.9+:
-          `pipx install git+https://github.com/WindyBanana/repograph`
+          \`pipx install git+https://github.com/WindyBanana/repograph\`
           NOTES
+          cat notes.md
 
       - name: Publish the release
         env:
@@ -193,7 +198,16 @@ jobs:
             v*) ;;
             *) echo "refusing to publish '$TAG': a version tag must start with v" >&2; exit 1 ;;
           esac
-          gh release create "$TAG" release/* \
-            --target "$GITHUB_SHA" \
-            --title "repograph $TAG" \
-            --notes-file notes.md
+          # Re-runnable: a re-dispatch of the same version corrects the notes and
+          # replaces the assets instead of failing on an existing release.
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release edit "$TAG" --title "repograph $TAG" --notes-file notes.md
+            gh release upload "$TAG" release/* --clobber
+          else
+            gh release create "$TAG" release/* \
+              --target "$GITHUB_SHA" \
+              --title "repograph $TAG" \
+              --notes-file notes.md
+          fi
+          gh release view "$TAG" --json tagName,name,assets \
+            --jq '"\(.name) — \(.assets | length) assets: \(.assets | map(.name) | join(", "))"' 
