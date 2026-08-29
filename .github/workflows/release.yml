@@ -4,11 +4,6 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
-    inputs:
-      version:
-        description: "Version to build (for a dry run without a tag)"
-        required: false
-        default: "dev"
 
 permissions:
   contents: write
@@ -41,68 +36,93 @@ jobs:
           python-version: "3.12"
 
       - name: Install the build tool
-        run: python -m pip install --upgrade pip pyinstaller==6.*
+        run: python -m pip install --upgrade pip "pyinstaller==6.*"
+
+      - name: Run the test suite
+        shell: bash
+        run: python -m unittest discover -s tests -q
+        env:
+          PYTHONPATH: packages/repograph-core/src:packages/repograph-render/src:packages/repograph-cli/src:packages/repograph-tui/src:packages/repograph-ui/src
 
       - name: Build the executable
         run: python -m PyInstaller --clean --noconfirm --distpath dist --workpath build/pyi packaging/repograph.spec
 
-      - name: Smoke test — the binary must actually scan
+      - name: Smoke test — the packaged binary must actually scan
         shell: bash
         env:
           REPOGRAPH_FORCE_CLI: "1"
         run: |
-          BIN=dist/repograph
-          [ "${{ matrix.platform }}" = "win32" ] && BIN=dist/repograph.exe
+          if [ "${{ matrix.platform }}" = "win32" ]; then
+            BIN="dist/repograph.exe"
+          else
+            BIN="dist/repograph"
+          fi
           "$BIN" --version
           "$BIN" scan examples/sample-monorepo -o smoke-out --quiet --no-git
           python - <<'PY'
-          import json, sys
+          import json
+          import sys
+
           manifest = json.load(open("smoke-out/MANIFEST.json"))
           expected = {"index.html", "AI-REPORT.md", "BUSINESS-OVERVIEW.md", "repograph.json",
-                      "report.pdf", "report.xlsx", "presentation.pptx"}
+                      "report.pdf", "report.xlsx", "presentation.pptx", "sbom.cdx.json"}
           missing = expected - set(manifest["files"])
           if missing:
               sys.exit(f"the packaged binary did not produce: {sorted(missing)}")
           if manifest["summary"]["applications"] != 4:
               sys.exit("the packaged binary did not find the sample applications")
+          if manifest["skipped"]:
+              sys.exit(f"formats failed inside the binary: {manifest['skipped']}")
           print(f"packaged binary produced {len(manifest['files'])} files")
           PY
 
       - name: Build the desktop wrapper
         shell: bash
         run: |
-          BIN=dist/repograph
-          [ "${{ matrix.platform }}" = "win32" ] && BIN=dist/repograph.exe
+          if [ "${{ matrix.platform }}" = "win32" ]; then
+            BIN="dist/repograph.exe"
+          else
+            BIN="dist/repograph"
+          fi
           python packaging/bundle.py "$BIN" -o dist --platform ${{ matrix.platform }}
 
-      - name: Package (unix)
-        if: matrix.platform != 'win32'
+      - name: Package
         shell: bash
         run: |
+          set -euo pipefail
+          NAME="repograph-${{ matrix.label }}"
           mkdir -p out
-          NAME=repograph-${{ matrix.label }}
-          cp README.md LICENSE docs/INSTALL.md dist/ 2>/dev/null || true
-          if [ "${{ matrix.platform }}" = "darwin" ]; then
-            (cd dist && zip -qry "../out/$NAME.zip" repograph repograph.app README.md LICENSE INSTALL.md)
+          cp README.md LICENSE dist/
+          cp docs/INSTALL.md dist/
+          cp scripts/install.sh dist/ 2>/dev/null || true
+          cp scripts/install.ps1 dist/ 2>/dev/null || true
+          cd dist
+          case "${{ matrix.platform }}" in
+            darwin)
+              zip -qry "../out/$NAME.zip" repograph repograph.app README.md LICENSE INSTALL.md install.sh
+              ;;
+            win32)
+              7z a -tzip "../out/$NAME.zip" repograph.exe create-shortcut.vbs README.md LICENSE INSTALL.md install.ps1 > /dev/null
+              ;;
+            *)
+              tar czf "../out/$NAME.tar.gz" repograph repograph.desktop repograph.svg README.md LICENSE INSTALL.md install.sh
+              ;;
+          esac
+          cd ../out
+          ARCHIVE=$(ls "$NAME".zip "$NAME".tar.gz 2>/dev/null | head -1)
+          if command -v sha256sum > /dev/null 2>&1; then
+            sha256sum "$ARCHIVE" > "$NAME.sha256"
           else
-            (cd dist && tar czf "../out/$NAME.tar.gz" repograph repograph.desktop repograph.svg README.md LICENSE INSTALL.md)
+            shasum -a 256 "$ARCHIVE" > "$NAME.sha256"
           fi
-          (cd out && shasum -a 256 * > "$NAME.sha256")
-
-      - name: Package (windows)
-        if: matrix.platform == 'win32'
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path out | Out-Null
-          $name = "repograph-${{ matrix.label }}"
-          Copy-Item README.md,LICENSE,docs/INSTALL.md dist/ -ErrorAction SilentlyContinue
-          Compress-Archive -Path dist/repograph.exe,dist/create-shortcut.vbs,dist/README.md,dist/LICENSE,dist/INSTALL.md -DestinationPath "out/$name.zip" -Force
-          Get-FileHash "out/$name.zip" -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower())  $name.zip" } | Out-File -Encoding ascii "out/$name.sha256"
+          cat "$NAME.sha256"
+          ls -la
 
       - uses: actions/upload-artifact@v4
         with:
           name: repograph-${{ matrix.label }}
           path: out/*
+          if-no-files-found: error
 
   release:
     needs: build
@@ -110,31 +130,51 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
-      - name: Collect
+
+      - name: Collect the builds
         run: |
+          set -euo pipefail
           mkdir -p release
           find artifacts -type f -exec cp {} release/ \;
           ls -la release
+
+      - name: Write the release notes
+        run: |
+          cat > notes.md <<'NOTES'
+          Standalone builds — no Python installation required. Each archive holds one
+          executable of about 9 MB with everything inside it.
+
+          | Platform | Download | How to run it |
+          |---|---|---|
+          | Windows | `repograph-windows-x86_64.zip` | double-click `repograph.exe` for the UI, or run it in a terminal for the CLI |
+          | macOS (Apple silicon) | `repograph-macos-arm64.zip` | double-click `repograph.app`, or `./repograph` in a terminal |
+          | macOS (Intel) | `repograph-macos-x86_64.zip` | as above |
+          | Linux | `repograph-linux-x86_64.tar.gz` | `./repograph`, or `./install.sh --binary ./repograph` for the launcher entry |
+
+          Every build was smoke-tested in CI by scanning the bundled sample monorepo and
+          asserting it produced the full report, PDF, workbook, deck and SBOM.
+
+          Verify a download against its `.sha256` file.
+
+          **Unsigned.** These binaries are not code-signed, so:
+          - macOS: right-click the app and choose Open, or `xattr -dr com.apple.quarantine repograph.app`
+          - Windows: SmartScreen → More info → Run anyway
+
+          Installing from source stays available and needs nothing but Python 3.9+:
+          `pipx install git+https://github.com/WindyBanana/repograph`
+          NOTES
+
       - name: Publish the release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: release/*
-          generate_release_notes: true
-          body: |
-            Standalone builds — no Python installation required.
-
-            | Platform | Download | Run it |
-            |---|---|---|
-            | Windows | `repograph-windows-x86_64.zip` | double-click `repograph.exe` for the UI, or run it in a terminal for the CLI |
-            | macOS (Apple silicon) | `repograph-macos-arm64.zip` | double-click `repograph.app`, or run `./repograph` in a terminal |
-            | macOS (Intel) | `repograph-macos-x86_64.zip` | as above |
-            | Linux | `repograph-linux-x86_64.tar.gz` | `./repograph` for the CLI, or install the `.desktop` entry for the launcher |
-
-            Verify a download with the matching `.sha256` file.
-
-            macOS will warn that the app is from an unidentified developer — it is
-            unsigned. Right-click the app and choose Open, or run
-            `xattr -d com.apple.quarantine repograph.app`.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          gh release create "$TAG" release/* \
+            --title "repograph $TAG" \
+            --notes-file notes.md \
+            --verify-tag
