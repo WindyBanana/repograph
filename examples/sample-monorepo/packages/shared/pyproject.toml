@@ -1,0 +1,5 @@
+[project]
+name = "acme-shared"
+version = "1.2.0"
+description = "Domain models and event contracts shared across ACME services"
+dependencies = ["pydantic>=2.0"]

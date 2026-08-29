@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: test (${{ matrix.os }}, python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.9", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Run the test suite
+        run: make test
+      - name: Scan repograph with repograph
+        run: ./bin/repograph scan . -o /tmp/self-scan --quiet
+      - name: Check the output is complete
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, sys
+          manifest = json.load(open("/tmp/self-scan/MANIFEST.json"))
+          expected = {"index.html", "AI-REPORT.md", "report.pdf", "report.xlsx",
+                      "presentation.pptx", "repograph.json", "sbom.cdx.json"}
+          missing = expected - set(manifest["files"])
+          if missing:
+              sys.exit(f"missing outputs: {sorted(missing)}")
+          if manifest["skipped"]:
+              sys.exit(f"formats skipped: {manifest['skipped']}")
+          print(f"{len(manifest['files'])} files written; "
+                f"{manifest['summary']['components']} components")
+          PY
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ruff
+      - run: ruff check .
+
+  demo:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: ./bin/repograph scan examples/sample-monorepo -o demo-report --quiet
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sample-monorepo-report
+          path: demo-report

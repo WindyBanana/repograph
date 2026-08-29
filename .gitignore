@@ -1,0 +1,25 @@
+# repograph output
+repograph-out/
+.repograph/
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.tox/
+htmlcov/
+.coverage
+
+# editors / os
+.idea/
+.vscode/
+.DS_Store
+*.swp

@@ -1,0 +1,11 @@
+[project]
+name = "acme-worker"
+version = "0.3.0"
+description = "Processes order events and updates fulfilment"
+dependencies = [
+  "celery>=5.3",
+  "kafka-python>=2.0",
+  "psycopg2-binary>=2.9",
+  "boto3>=1.34",
+  "acme-shared>=1.2.0",
+]

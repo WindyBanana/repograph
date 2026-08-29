@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "repograph-cli"
+version = "0.1.0"
+description = "Command line interface for repograph"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "repograph contributors" }]
+dependencies = ["repograph-core", "repograph-render"]
+
+[project.scripts]
+repograph = "repograph_cli.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

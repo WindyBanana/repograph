@@ -1,0 +1,33 @@
+version: "3.9"
+services:
+  api:
+    build: ./apps/api
+    ports:
+      - "8080:8080"
+    environment:
+      - DATABASE_URL=postgres://app:app@db:5432/orders
+      - REDIS_URL=redis://cache:6379/0
+      - STRIPE_API_KEY=${STRIPE_API_KEY}
+    depends_on:
+      - db
+      - cache
+      - broker
+  web:
+    build: ./apps/web
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+  worker:
+    build: ./apps/worker
+    depends_on:
+      - broker
+      - db
+  db:
+    image: postgres:15
+    environment:
+      - POSTGRES_PASSWORD=app
+  cache:
+    image: redis:7
+  broker:
+    image: confluentinc/cp-kafka:7.5.0
