@@ -8,6 +8,8 @@
 | `repograph tui [path]` | Browse a scan in the terminal (scans first if there is no result yet) |
 | `repograph serve [dir]` | Serve an output folder over http and open a browser |
 | `repograph summary [dir]` | Print the headline numbers of an existing scan |
+| `repograph agent [dir]` | Show (or run) the AI enrichment pass for a scan — see [AI.md](AI.md) |
+| `repograph enrich [dir]` | Validate an agent's answers, merge them and re-render |
 | `repograph render <json>` | Re-render outputs from an existing `repograph.json` |
 
 ## scan
@@ -31,6 +33,27 @@ repograph scan [path]
 
 Exit code is `0` on success, `2` for a bad path, `130` if interrupted. repograph does **not** fail
 the build on findings — assert on `MANIFEST.json` if you want that.
+
+## agent
+
+```
+repograph agent [dir]
+  --run TOOL       launch an agent CLI (claude, codex, gemini, aider, cursor, opencode, amp, qwen)
+  --yes            do not ask for confirmation before running it
+  --print-prompt   print the instructions instead of the commands
+```
+
+Without `--run` it only prints: the pack it wrote, the commands for every agent CLI it found, and
+what to do afterwards. Nothing is sent anywhere by repograph itself.
+
+## enrich
+
+```
+repograph enrich [dir|enrichment.json]
+  --format LIST         formats to re-render (default: all)
+  --no-render           merge into repograph.json without re-rendering
+  --allow-unsupported   accept risks that carry no file:line evidence
+```
 
 ## Terminal UI keys
 

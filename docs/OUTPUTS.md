@@ -14,6 +14,9 @@ One scan writes one folder. Nothing outside it is touched.
 | `MANIFEST.json` | pipelines | Everything written plus headline numbers, easy to assert on in CI. |
 | `sbom.cdx.json` / `sbom.spdx.json` | compliance | CycloneDX 1.5 and SPDX 2.3, including vulnerabilities when `--online` was used. |
 | `data/*.csv` | spreadsheets, diffing | findings, dependencies, endpoints, external_systems, applications, components, edges, files, symbols, environment_variables. |
+| `AGENT-INSTRUCTIONS.md` | your AI agent | The prompt for the optional enrichment pass. |
+| `agent/enrichment-request.json` | your AI agent | The open questions, each with the files worth reading. |
+| `agent/enrichment.schema.json` | your AI agent | The shape of a valid answer; `enrichment.example.json` is a filled-in example. |
 | `diagrams/*.svg` | anywhere | Rendered diagrams. |
 | `diagrams/mermaid/*.mmd` | docs, chat, AI | Mermaid sources: C4, flowcharts, sequence diagrams, mindmap, pies. |
 | `diagrams/plantuml/*.puml` | Confluence, IDEs | C4-PlantUML, component and ArchiMate views, activity diagrams. |

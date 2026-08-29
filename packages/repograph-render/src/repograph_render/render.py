@@ -12,6 +12,7 @@ from repograph_core.model import ScanResult
 from repograph_core.security.sbom import cyclonedx, spdx
 
 from . import (
+    agentpack,
     archimate_xml,
     bpmn,
     csv_export,
@@ -29,7 +30,7 @@ from . import (
 from . import diagrams as diagram_mod
 
 ALL_FORMATS = ("html", "json", "markdown", "ai", "svg", "mermaid", "plantuml", "dot", "bpmn",
-               "archimate", "csv", "xlsx", "pptx", "pdf", "sbom")
+               "archimate", "csv", "xlsx", "pptx", "pdf", "sbom", "agent")
 DEFAULT_FORMATS = ALL_FORMATS
 
 ProgressFn = Callable[[str], None]
@@ -151,12 +152,19 @@ def render_all(result: ScanResult, output_dir: str, formats: Sequence[str] = DEF
         except Exception as exc:
             out.skipped["pdf"] = f"{type(exc).__name__}: {exc}"
 
+    if "agent" in wanted:
+        note("Writing agent pack")
+        out.files.extend(agentpack.write(result, output_dir, result.meta.root))
+
     if "html" in wanted:
         note("Writing interactive HTML report")
         svg_sources = {name: svg.render_diagram(diagram) for name, diagram in layouts.items()}
         listing = sorted(os.path.relpath(p, output_dir).replace(os.sep, "/") for p in out.files)
+        agent_panel = agentpack.panel_html(result, output_dir, result.meta.root) \
+            if "agent" in wanted else ""
         _write(os.path.join(output_dir, "index.html"),
-               report_html.render(result, svg_sources, mermaid_sources, ai_report, listing), out)
+               report_html.render(result, svg_sources, mermaid_sources, ai_report, listing,
+                                  agent_panel=agent_panel), out)
 
     _write(os.path.join(output_dir, "README.md"), _folder_readme(result, out), out)
     _write(os.path.join(output_dir, "MANIFEST.json"),
@@ -208,6 +216,7 @@ analysis — no AI, no code execution{advisory_note}.
 | an AI agent or a tool | `AI-REPORT.md` (dense, structured, every claim carries file:line) |
 | presenting to people | `presentation.pptx` or `report.pdf` |
 | doing security or compliance work | `report.xlsx`, `data/findings.csv`, `sbom.cdx.json` |
+| wanting an AI second opinion | `AGENT-INSTRUCTIONS.md` (run any coding agent on it, then `repograph enrich`) |
 | wiring this into another tool | `repograph.json` (the complete model) |
 
 ## What is here
@@ -229,6 +238,8 @@ analysis — no AI, no code execution{advisory_note}.
 - `diagrams/dot/*.dot` — Graphviz sources (`dot -Tsvg`).
 - `diagrams/bpmn/*.bpmn` — BPMN 2.0 processes with layout (open in bpmn.io / Camunda).
 - `models/archimate.xml` — ArchiMate 3.1 Open Exchange model (import into Archi).
+- `AGENT-INSTRUCTIONS.md` + `agent/` — the optional AI layer: open a coding agent in the
+  repository and point it at these to add intent, meaning and a judgement on each finding.
 
 ## Headline numbers
 

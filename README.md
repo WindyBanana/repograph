@@ -134,6 +134,33 @@ so you can see when the two disagree.
 | **Security** | Hardcoded secrets, insecure code patterns (mapped to CWE), container and IaC misconfiguration, dependency hygiene, and OSV advisories with `--online` |
 | **Quality** | Dependency cycles, layering, fan-in/fan-out, PageRank, test ratio, git change hotspots |
 
+## Optional: an AI second opinion
+
+The scan needs no model. If you want the part a scanner cannot do — intent, business meaning, a
+judgement on each finding — hand the output to whichever coding agent you already use:
+
+```bash
+repograph scan .
+repograph agent repograph-out          # prints the exact command for Claude Code, Codex, Gemini…
+repograph enrich repograph-out         # validate, merge, re-render with contributions labelled
+```
+
+**Bring your own CLI, not your own key.** There is nothing to host, no key to store and no bill on
+our side: the agent you already pay for reads `AGENT-INSTRUCTIONS.md`, answers a generated list of
+open questions (each pointing at the few files worth opening), and writes a typed
+`agent/enrichment.json`. repograph validates every answer — ids must exist, risks must cite
+`path:line` — and reports whatever it rejects. Model contributions appear in every report clearly
+labelled, never mixed with the scan's facts.
+
+Run against the bundled example, an agent confirmed 5 findings and overturned 3 with cited
+reasoning — MD5 used for a non-security purpose, a `0.0.0.0` bind that only ever runs inside a
+container, and dead Dockerfile configuration the app never reads:
+
+![AI assessments beside the scanner's findings](docs/images/ai-findings.png)
+
+Its answers are checked in at `examples/agent-enrichment.example.json`, and the test suite
+re-merges them so the contract stays honest. See [docs/AI.md](docs/AI.md).
+
 ## Monorepos
 
 repograph is built for them. It detects npm/pnpm/Yarn workspaces, Cargo workspaces, Go modules,

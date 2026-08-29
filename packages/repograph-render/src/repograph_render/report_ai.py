@@ -243,7 +243,44 @@ components:
             if key.startswith("flow-"):
                 add(f"\n### {key}\n```mermaid\n{source}\n```")
 
-    add(SECTION + "12. LIMITS OF THIS ANALYSIS")
+    if result.ai.present:
+        ai = result.ai
+        add(SECTION + "12. MODEL CONTRIBUTIONS (NOT PART OF THE DETERMINISTIC SCAN)")
+        add(f"""These entries were written by an AI agent, not derived by the scanner. They were
+validated against the scan (ids must exist, risks must cite evidence) but they are judgement,
+not measurement. Treat them as a reviewer's opinion.
+
+source: {ai.provenance.tool} {ai.provenance.model} at {ai.provenance.generated_at}
+merged_contributions: {ai.answered_questions}
+rejected_contributions: {len(ai.rejected)}""")
+        for app in result.apps:
+            if app.ai_summary:
+                add(f"\n## {app.name} (model summary)\n{app.ai_summary}")
+                if app.ai_responsibilities:
+                    add("responsibilities:")
+                    add(_bullets(app.ai_responsibilities))
+        assessed = [f for f in result.findings if f.ai_assessment]
+        if assessed:
+            add("\nfinding assessments:")
+            for finding in assessed:
+                add(f"- [{finding.identifier or finding.id}] {finding.title}\n"
+                    f"  assessment: {finding.ai_assessment}\n"
+                    f"  reasoning: {finding.ai_reasoning}")
+        if ai.insights:
+            add("\ninsights:")
+            for insight in ai.insights:
+                add(f"- [{insight.kind}/{insight.severity}] {insight.title}\n"
+                    f"  {insight.detail}\n"
+                    f"  confidence: {insight.confidence} | evidence: "
+                    f"{', '.join(insight.evidence) or 'none given'}")
+        if ai.unanswered:
+            add("\nquestions the agent could not answer:")
+            add(_bullets(ai.unanswered))
+        if ai.rejected:
+            add("\ncontributions rejected on merge (kept for transparency):")
+            add(_bullets(ai.rejected))
+
+    add(SECTION + ("13" if result.ai.present else "12") + ". LIMITS OF THIS ANALYSIS")
     add(f"""- Import resolution: {summary.get('unresolved_imports', 0)} import statements could not be
   resolved to a file or a package; those relationships are missing from the graph.
 - Dynamic behaviour (reflection, DI containers, runtime plugin loading, string-built SQL or URLs)
@@ -252,7 +289,11 @@ components:
   not that the system is used in production. Every claim carries its evidence location.
 - {advisory_note}
 - Vendored directories were skipped: {', '.join(summary.get('vendored_directories', [])) or 'none found'}.
-- Scanner warnings: {'; '.join(meta.warnings) or 'none'}""")
+- Scanner warnings: {'; '.join(meta.warnings) or 'none'}
+- AI enrichment: {"present — sections marked as model contributions are judgement, not measurement"
+                  if result.ai.present else
+                  "not present; every statement above is machine-derived. Run an agent against "
+                  "AGENT-INSTRUCTIONS.md to add intent and judgement."}""")
 
     add(SECTION + "END OF REPORT")
     return "\n".join(out) + "\n"

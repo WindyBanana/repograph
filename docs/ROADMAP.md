@@ -15,6 +15,13 @@ Cache per-file analysis keyed by content hash so a re-scan only reprocesses what
 `repograph diff` can show what moved between two scans (new endpoints, new dependencies, new
 findings, changed architecture).
 
+## Direct model APIs (deliberately not done yet)
+
+The AI layer works through whatever agent CLI you already have, because that needs no hosting, no
+key storage and no per-token billing from us — see [AI.md](AI.md). A direct provider integration
+would only earn its place for CI runners with no agent CLI available. If it happens, it will write
+the same `enrichment.json` the contract already defines rather than becoming a second code path.
+
 ## Project rules file
 
 `.repograph.toml` for project-specific conventions: extra ignore patterns, custom component

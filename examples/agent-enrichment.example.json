@@ -1,0 +1,277 @@
+{
+  "schema": "repograph-enrichment/1",
+  "generated_by": {
+    "tool": "claude-code",
+    "model": "claude-sonnet-5",
+    "generated_at": "2026-08-29T00:00:00Z",
+    "notes": "Manual review of the files listed in enrichment-request.json; every claim below is cited to path:line."
+  },
+  "applications": [
+    {
+      "id": "app-apps-api",
+      "summary": "acme-api is the order-intake and payment service behind the ACME storefront: it charges the customer through Stripe, persists the order to PostgreSQL, and publishes an order-created event to Kafka for the fulfilment worker to pick up.",
+      "responsibilities": [
+        "Expose the order HTTP API: create, fetch and cancel (apps/api/app/routers/orders.py:13,22,31)",
+        "Take payment via Stripe before recording the order (apps/api/app/services/order_service.py:28)",
+        "Persist orders to PostgreSQL through a repository (apps/api/app/repositories/order_repository.py:16)",
+        "Publish an OrderCreated event to Kafka for the worker (apps/api/app/services/order_service.py:35)",
+        "Serve an unauthenticated liveness check at GET /health (apps/api/app/main.py:12)"
+      ],
+      "evidence": [
+        "apps/api/app/routers/orders.py:22",
+        "apps/api/app/services/order_service.py:25",
+        "apps/api/app/main.py:12"
+      ]
+    },
+    {
+      "id": "app-apps-web",
+      "summary": "@acme/web is the browser storefront: it fetches a customer's orders from acme-api and renders them, with client-side routes for a list view and a per-order view.",
+      "responsibilities": [
+        "Bootstrap the React app into the DOM (apps/web/src/main.tsx:5)",
+        "Define client-side routes for order list/detail (apps/web/src/App.tsx:8)",
+        "Call the API to list orders for a customer (apps/web/src/api/client.ts:13)",
+        "Render the order list, or an error message, in the UI (apps/web/src/components/OrderList.tsx:13)"
+      ],
+      "evidence": [
+        "apps/web/src/App.tsx:9",
+        "apps/web/src/api/client.ts:13"
+      ]
+    },
+    {
+      "id": "app-apps-worker",
+      "summary": "acme-worker is the asynchronous fulfilment side of the order flow: it consumes order-created events from Kafka, hands them to Celery to generate an invoice and store it in S3, and hosts a (currently unwired) nightly reconciliation task.",
+      "responsibilities": [
+        "Consume orders.created events from Kafka and hand them to Celery (apps/worker/worker/consumer.py:12)",
+        "Run the fulfil_order task: derive an invoice reference and store an invoice object in S3 (apps/worker/worker/tasks.py:18)",
+        "Store invoice objects in the acme-invoices S3 bucket (apps/worker/worker/storage.py:9)",
+        "Define a reconcile task against the payment provider, though it is a stub with no caller (apps/worker/worker/tasks.py:26)"
+      ],
+      "evidence": [
+        "apps/worker/worker/consumer.py:12",
+        "apps/worker/worker/tasks.py:18"
+      ]
+    },
+    {
+      "id": "app-packages-shared",
+      "summary": "acme-shared is the contract library imported by both acme-api and acme-worker: it defines the Order/OrderLine domain model and the Kafka event names/payloads so the two services agree on what an order and an order event look like.",
+      "responsibilities": [
+        "Define the Order and OrderLine dataclasses (packages/shared/shared/models.py:9,16)",
+        "Define Kafka topic name constants (ORDER_CREATED, ORDER_PAID, ORDER_SHIPPED) (packages/shared/shared/events.py:5)",
+        "Define the OrderCreated event payload published/consumed across services (packages/shared/shared/events.py:11)"
+      ],
+      "evidence": [
+        "packages/shared/shared/models.py:16",
+        "packages/shared/shared/events.py:11"
+      ]
+    }
+  ],
+  "components": [
+    {
+      "id": "c-apps-api-app",
+      "summary": "The FastAPI application root: wires the app and health endpoint (apps/api/app/main.py:8), holds runtime configuration including two committed secrets (apps/api/app/config.py:6,9), and a raw psycopg2 helper with one unparameterized, currently unused query (apps/api/app/db.py:14).",
+      "evidence": [
+        "apps/api/app/main.py:8",
+        "apps/api/app/config.py:9",
+        "apps/api/app/db.py:14"
+      ]
+    },
+    {
+      "id": "c-apps-web-src",
+      "summary": "The entire React storefront: DOM bootstrap (apps/web/src/main.tsx:5), routes (apps/web/src/App.tsx:8), the axios API client (apps/web/src/api/client.ts:13), and the order list component that also renders fetch errors as raw HTML (apps/web/src/components/OrderList.tsx:13).",
+      "evidence": [
+        "apps/web/src/App.tsx:9",
+        "apps/web/src/api/client.ts:13",
+        "apps/web/src/components/OrderList.tsx:13"
+      ]
+    },
+    {
+      "id": "c-packages-shared",
+      "summary": "A small, framework-free contract library: the Order/OrderLine dataclasses (packages/shared/shared/models.py:9,16) and the Kafka topic constants plus OrderCreated event dataclass (packages/shared/shared/events.py:5,11) that acme-api and acme-worker both import.",
+      "evidence": [
+        "packages/shared/shared/models.py:16",
+        "packages/shared/shared/events.py:11"
+      ]
+    }
+  ],
+  "flows": [
+    {
+      "id": "flow-app-apps-api-http-health",
+      "narrative": "GET /health is an unauthenticated liveness probe: it always returns a static {\"status\": \"ok\"} without touching Postgres, Redis, Kafka or any external system (apps/api/app/main.py:12-14). It decides nothing and changes nothing, but that also means a green health check does not prove the service can actually take an order — none of its real dependencies are exercised.",
+      "evidence": [
+        "apps/api/app/main.py:12",
+        "apps/api/app/main.py:13"
+      ]
+    },
+    {
+      "id": "flow-app-apps-api-http-orders",
+      "narrative": "A client calls POST /orders with a JSON payload; the handler requires customer_id (400 if missing) but never reads or requires order lines, so it always builds an Order with an empty lines list (apps/api/app/routers/orders.py:23-27). OrderService.create then rejects any order with no lines (apps/api/app/services/order_service.py:26-27), so every POST /orders call currently fails with an unhandled ValueError before Stripe is even charged. GET /orders/{id} returns 404 via the repository lookup (apps/api/app/routers/orders.py:16-18); DELETE /orders/{id} just echoes a canned 'cancelled' response without touching the database or issuing a refund (apps/api/app/routers/orders.py:32-34), so it never actually cancels anything.",
+      "evidence": [
+        "apps/api/app/routers/orders.py:27",
+        "apps/api/app/services/order_service.py:26",
+        "apps/api/app/routers/orders.py:33"
+      ]
+    },
+    {
+      "id": "flow-app-apps-worker-event-event-fulfil-order",
+      "narrative": "Triggered when the Kafka consumer receives an orders.created message and calls fulfil_order.delay(order_id) (apps/worker/worker/consumer.py:13-16). The Celery task derives an MD5 digest of the order id and stores it as the body of an S3 object under invoices/{order_id}.pdf (apps/worker/worker/tasks.py:19-22, apps/worker/worker/storage.py:9-12) — a placeholder, not a real invoice document. It returns the string ORDER_SHIPPED, but nothing publishes that value anywhere, so no order status is ever updated and no downstream system is told the order shipped.",
+      "evidence": [
+        "apps/worker/worker/consumer.py:16",
+        "apps/worker/worker/tasks.py:21",
+        "apps/worker/worker/storage.py:10"
+      ]
+    },
+    {
+      "id": "flow-app-apps-worker-event-event-reconcile",
+      "narrative": "The reconcile Celery task is defined to run nightly reconciliation against the payment provider per its docstring (apps/worker/worker/tasks.py:26-27), but nothing in this repository calls it — no Celery beat schedule, no Kafka topic and no other caller exist. It takes a day string and immediately returns 0, so as shipped it is an unwired stub rather than an implemented process.",
+      "evidence": [
+        "apps/worker/worker/tasks.py:26",
+        "apps/worker/worker/tasks.py:28"
+      ]
+    }
+  ],
+  "findings": [
+    {
+      "id": "rule-py-sql-format-apps-api-app-db-py-14",
+      "assessment": "true_positive",
+      "reasoning": "find_orders_by_customer builds SQL by '%' string-formatting an unsanitised customer_id directly into the query, unlike the sibling OrderRepository which uses parameterised placeholders (apps/api/app/repositories/order_repository.py:13,19). The function is not called anywhere else in the repository today, so it is currently dead code, but it is a live SQL-injection landmine that will fire the moment something wires it to a request.",
+      "evidence": [
+        "apps/api/app/db.py:14",
+        "apps/api/app/repositories/order_repository.py:13"
+      ]
+    },
+    {
+      "id": "rule-tls-verify-off-apps-api-app-services-order-service-py-42",
+      "assessment": "true_positive",
+      "reasoning": "request_shipment disables certificate verification on an outbound HTTPS call to the shipping partner that carries an order_id (apps/api/app/services/order_service.py:41-42), exposing it to MITM tampering. Like the SQL-format issue, this method is not called from any router or task in the repository, so it is not on a live path today, but it is real vulnerable code, not a false match.",
+      "evidence": [
+        "apps/api/app/services/order_service.py:42",
+        "apps/api/app/config.py:10"
+      ]
+    },
+    {
+      "id": "secret-password-assign-apps-api-app-config-py-9",
+      "assessment": "true_positive",
+      "reasoning": "PAYMENT_API_SECRET is a hardcoded Stripe secret key committed to the repository, and it is actively used to authenticate every Stripe call (apps/api/app/services/order_service.py:16,28), not just declared and unused. Anything committed to git must be treated as compromised and rotated.",
+      "evidence": [
+        "apps/api/app/config.py:9",
+        "apps/api/app/services/order_service.py:16"
+      ]
+    },
+    {
+      "id": "rule-debug-on-apps-api-app-config-py-5",
+      "assessment": "true_positive",
+      "reasoning": "DEBUG is hardcoded to True with no environment gate at all, and is fed straight into FastAPI's debug flag (apps/api/app/main.py:5,8), so every deployment — not just local dev — runs with FastAPI debug mode (stack traces, interactive tracebacks) on.",
+      "evidence": [
+        "apps/api/app/config.py:5",
+        "apps/api/app/main.py:8"
+      ]
+    },
+    {
+      "id": "rule-debug-on-apps-api-dockerfile-5",
+      "assessment": "false_positive",
+      "reasoning": "The application never reads a DEBUG environment variable — apps/api/app/config.py:5 hardcodes DEBUG = True as a literal, not via os.getenv — so ENV DEBUG=1 in the Dockerfile has no effect on runtime behaviour; it's dead configuration. The real, effective debug-mode bug is apps/api/app/config.py:5, already reported separately.",
+      "evidence": [
+        "apps/api/Dockerfile:5",
+        "apps/api/app/config.py:5"
+      ]
+    },
+    {
+      "id": "rule-js-innerhtml-apps-web-src-components-orderlist-tsx-13",
+      "assessment": "true_positive",
+      "reasoning": "The error state is built from String(e) on whatever the axios request throws (apps/web/src/components/OrderList.tsx:10) and then injected as raw HTML instead of text (line 13). Nothing sanitises it, and there is no reason it needs to be HTML rather than a text node — even if today's failure strings look benign, any error message that ever echoes response content would execute as markup.",
+      "evidence": [
+        "apps/web/src/components/OrderList.tsx:10",
+        "apps/web/src/components/OrderList.tsx:13"
+      ]
+    },
+    {
+      "id": "rule-weak-hash-apps-worker-worker-tasks-py-21",
+      "assessment": "false_positive",
+      "reasoning": "This MD5 use is not for authentication, integrity or password storage — it derives a placeholder reference string that becomes the body (not the key) of a stub S3 'invoice' object (apps/worker/worker/tasks.py:21-22, apps/worker/worker/storage.py:9-11). MD5's cryptographic weaknesses (collision/preimage attacks) are not a security concern for this non-security use, though the invoice content itself being a bare hash is a separate correctness/business concern.",
+      "evidence": [
+        "apps/worker/worker/tasks.py:21",
+        "apps/worker/worker/storage.py:10"
+      ]
+    },
+    {
+      "id": "rule-wildcard-bind-apps-api-app-main-py-20",
+      "assessment": "false_positive",
+      "reasoning": "The service is only ever run inside a container: the Dockerfile CMD also binds 0.0.0.0 (apps/api/Dockerfile:7) and docker-compose publishes the same port mapping (docker-compose.yml service api, port 8080:8080). Binding to all interfaces inside a container is required for the published port to work at all, not an extra exposure beyond what compose already does.",
+      "evidence": [
+        "apps/api/app/main.py:20",
+        "apps/api/Dockerfile:7"
+      ]
+    }
+  ],
+  "insights": [
+    {
+      "id": "repo-risks",
+      "kind": "risk",
+      "title": "Three biggest risks: committed secrets, a dead-on-arrival order-creation path, and no compensation between payment/persistence/publish",
+      "detail": "1) Secrets are committed and live: PAYMENT_API_SECRET (apps/api/app/config.py:9) and the default DATABASE_URL password (apps/api/app/config.py:6, docker-compose.yml:8) are in git and actively used — rotate them first, it's the fastest real compromise. 2) POST /orders cannot succeed as written: the router always builds an Order with an empty lines list (apps/api/app/routers/orders.py:23-27), and OrderService.create unconditionally rejects orders with no lines (apps/api/app/services/order_service.py:26-27) — the core feature of the API is broken. 3) Order creation charges Stripe, then saves to Postgres, then publishes to Kafka in-process with no error handling or outbox (apps/api/app/services/order_service.py:28-39); a failure after the charge leaves a customer billed with no order record or no fulfilment ever triggered. Fix order: rotate the secrets immediately (near-zero effort, real exposure), then fix the order-creation bug (nothing works without it), then add a resilient publish/outbox path.",
+      "severity": "high",
+      "confidence": "high",
+      "targets": [
+        "app-apps-api"
+      ],
+      "evidence": [
+        "apps/api/app/config.py:9",
+        "apps/api/app/routers/orders.py:27",
+        "apps/api/app/services/order_service.py:26",
+        "apps/api/app/services/order_service.py:36"
+      ]
+    },
+    {
+      "id": "repo-onboarding",
+      "kind": "observation",
+      "title": "Non-obvious conventions: shared's import name differs from its package name, DEBUG isn't env-driven, and there's a real import cycle",
+      "detail": "acme-shared is declared and installed as 'acme-shared' (packages/shared/pyproject.toml:2) but imported as `shared` (e.g. apps/api/app/routers/orders.py:5) — that mismatch is exactly why the scanner flags apps/api/pyproject.toml's acme-shared dependency as 'unused': it's actually used everywhere. DEBUG mode is a hardcoded Python literal (apps/api/app/config.py:5), not read from an environment variable, so the Dockerfile's ENV DEBUG=1 (apps/api/Dockerfile:5) is a no-op — don't expect changing it to do anything. The controller/service/repository layers in acme-api form a real dependency cycle (app -> app/repositories -> app/routers -> app/services -> app, per section 3 of AI-REPORT.md), so new code should avoid adding further cross-layer imports. Finally, there are no test files anywhere in the repo (test_file_ratio 0.0, AI-REPORT.md section 1), so the CI 'test' job runs against no tests.",
+      "severity": "medium",
+      "confidence": "high",
+      "targets": [
+        "app-apps-api",
+        "app-packages-shared"
+      ],
+      "evidence": [
+        "packages/shared/pyproject.toml:2",
+        "apps/api/app/routers/orders.py:5",
+        "apps/api/app/config.py:5",
+        "apps/api/Dockerfile:5"
+      ]
+    },
+    {
+      "id": "repo-single-points",
+      "kind": "risk",
+      "title": "Stripe, PostgreSQL and Kafka are single points of failure for order creation; the shipping API currently is not",
+      "detail": "Stripe down: order creation fails outright since Charge.create runs before anything is persisted (apps/api/app/services/order_service.py:28-30) — no half-written state, but zero orders can be created. PostgreSQL down: every order read/write fails (apps/api/app/repositories/order_repository.py:12,17), with no fallback store. Kafka down: publish() (apps/api/app/services/order_service.py:35-39) runs after the Stripe charge and the Postgres save with no try/except, so a broker outage at that point leaves a paid, persisted order that the worker will never hear about — nothing retries it. Redis down: the order-status cache.set call (apps/api/app/services/order_service.py:31) would raise after payment and persistence already succeeded, for the same reason. AWS S3 down: only apps/worker/worker/storage.py:11 (invoice storage) fails, so fulfilment stalls but the customer-facing API is unaffected. shipping.acme-logistics.example: request_shipment (apps/api/app/services/order_service.py:41-42) is not called from anywhere, so its outage currently breaks nothing.",
+      "severity": "high",
+      "confidence": "medium",
+      "targets": [
+        "app-apps-api",
+        "app-apps-worker"
+      ],
+      "evidence": [
+        "apps/api/app/services/order_service.py:28",
+        "apps/api/app/repositories/order_repository.py:12",
+        "apps/api/app/services/order_service.py:36",
+        "apps/worker/worker/storage.py:11"
+      ]
+    },
+    {
+      "id": "systems-thin-evidence",
+      "kind": "answer",
+      "title": "shipping.acme-logistics.example is a real, coded integration point — but it's currently dead code",
+      "detail": "SHIPPING_API is a concrete configured URL (apps/api/app/config.py:10), not an incidental string, and it's consumed by a real method, OrderService.request_shipment, which actually issues an HTTPS POST to it (apps/api/app/services/order_service.py:41-42). However nothing in the repository calls request_shipment — it isn't wired into any router or task — so today the integration exists in code but has zero live traffic; it's a genuine but unused integration point rather than a leftover comment.",
+      "severity": "low",
+      "confidence": "high",
+      "targets": [
+        "app-apps-api"
+      ],
+      "evidence": [
+        "apps/api/app/config.py:10",
+        "apps/api/app/services/order_service.py:42"
+      ]
+    }
+  ],
+  "unanswered": []
+}

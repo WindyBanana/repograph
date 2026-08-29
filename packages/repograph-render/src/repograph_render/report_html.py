@@ -91,7 +91,8 @@ def _graph_payload(result: ScanResult, max_nodes: int = 260) -> Dict[str, object
 
 
 def render(result: ScanResult, diagrams: Dict[str, str], mermaid: Dict[str, str],
-           ai_report: str = "", output_files: Sequence[str] = ()) -> str:
+           ai_report: str = "", output_files: Sequence[str] = (),
+           agent_panel: str = "") -> str:
     meta = result.meta
     summary = result.summary
 
@@ -122,7 +123,7 @@ def render(result: ScanResult, diagrams: Dict[str, str], mermaid: Dict[str, str]
         _integrations(result),
         _infrastructure(result),
         _files(result),
-        _ai(ai_report, output_files),
+        _ai(ai_report, output_files, agent_panel, result),
     ]
 
     payload = json.dumps({"graph": _graph_payload(result), "colors":
@@ -311,6 +312,15 @@ def _apps(result: ScanResult, diagrams: Dict[str, str], mermaid: Dict[str, str])
         diagram = diagrams.get(f"components-{app.id}", "")
         diagram_block = (f'<details><summary>Component diagram</summary>'
                          f'<div class="diagram">{diagram}</div></details>') if diagram else ""
+        ai_block = ""
+        if app.ai_summary:
+            responsibilities = ""
+            if app.ai_responsibilities:
+                items = "".join(f"<li>{e(r)}</li>" for r in app.ai_responsibilities)
+                responsibilities = f'<ul class="small">{items}</ul>'
+            ai_block = (f'<div class="panel" style="margin:8px 0"><span class="tag">AI generated'
+                        f'</span> <span class="small">{e(app.ai_summary)}</span>'
+                        f'{responsibilities}</div>')
         purpose_block = ""
         if app.purpose and app.purpose != app.description:
             purpose_block = (f'<p class="small muted"><b>Read from the code:</b> '
@@ -320,6 +330,7 @@ def _apps(result: ScanResult, diagrams: Dict[str, str], mermaid: Dict[str, str])
  <span class="tag">{e(app.kind)}</span></h3>
 <p class="small">{e(app.description or 'No description found in a README or manifest.')}</p>
 {purpose_block}
+{ai_block}
 <dl class="kv small">
   <dt>Root</dt><dd class="mono">{e(app.root or '.')}</dd>
   <dt>Architecture style</dt><dd>{e(app.architecture_style)}</dd>
@@ -435,8 +446,14 @@ against what the code actually imports.</p>
 
 def _security(result: ScanResult) -> str:
     rows = []
+    assessed = any(f.ai_assessment for f in result.findings)
     for finding in result.findings:
         references = " ".join(f'<a href="{e(url)}">ref</a>' for url in finding.references[:2] if url)
+        assessment = ""
+        if finding.ai_assessment:
+            label = finding.ai_assessment.replace("_", " ")
+            assessment = (f'<span class="tag">{e(label)}</span>'
+                          f'<div class="small muted">{e(finding.ai_reasoning)}</div>')
         rows.append([
             f'<span class="badge {e(finding.severity)}">{e(finding.severity)}</span>',
             e(finding.category),
@@ -446,9 +463,11 @@ def _security(result: ScanResult) -> str:
             _link(result, finding.file, finding.line) if finding.file else "—",
             e(finding.confidence),
             references or "—",
-        ])
+        ] + ([assessment or "—"] if assessed else []))
     headers = [("Severity", False), ("Category", False), ("Finding", False), ("Id", False),
                ("CWE", False), ("Location", False), ("Confidence", False), ("Refs", False)]
+    if assessed:
+        headers.append(("AI assessment", False))
     counts = result.metrics.findings_by_severity
     return f"""<section data-tab="security" hidden>
 <h2>Vulnerabilities and risks ({sum(counts.values())})</h2>
@@ -587,12 +606,51 @@ cycles found between components.</p>
 </section>"""
 
 
-def _ai(ai_report: str, output_files: Sequence[str]) -> str:
+def _ai(ai_report: str, output_files: Sequence[str], agent_panel: str,
+        result: ScanResult) -> str:
     files = "".join(f'<li><a href="{e(f)}">{e(f)}</a></li>' for f in output_files)
     return f"""<section data-tab="ai" hidden>
+<h2>AI: read it, or let one help</h2>
+<p class="lede">Everything in this report was produced without a model. This tab is where AI is
+allowed in — on your terms.</p>
+{agent_panel}
+{_ai_contributions(result)}
 <h2>Agent-readable report</h2>
 <p class="lede">The same analysis as a single dense Markdown document: paste it into any AI tool to
 give it a full picture of this repository without letting it read the code.</p>
 <div class="panel"><h3>Files in this output folder</h3><ul class="small">{files}</ul></div>
 <pre>{e(ai_report)}</pre>
 </section>"""
+
+
+def _ai_contributions(result: ScanResult) -> str:
+    ai = result.ai
+    if not ai.present:
+        return ""
+    provenance = (f"{ai.provenance.tool}"
+                  + (f" · {ai.provenance.model}" if ai.provenance.model else "")
+                  + (f" · {ai.provenance.generated_at}" if ai.provenance.generated_at else ""))
+    insights = "".join(
+        f'<div class="finding {e(i.severity)}"><b>{e(i.title)}</b> '
+        f'<span class="tag">{e(i.kind)}</span> '
+        f'<span class="tag">confidence {e(i.confidence)}</span>'
+        f'<div class="small">{e(i.detail)}</div>'
+        f'<div class="where">{" · ".join(e(x) for x in i.evidence)}</div></div>'
+        for i in ai.insights
+    ) or '<p class="muted small">No insights were returned.</p>'
+    rejected = ""
+    if ai.rejected:
+        items = "".join(f"<li>{e(r)}</li>" for r in ai.rejected[:20])
+        rejected = (f'<details><summary>{len(ai.rejected)} contribution(s) rejected on merge'
+                    f'</summary><ul class="small">{items}</ul></details>')
+    unanswered = ""
+    if ai.unanswered:
+        items = "".join(f"<li>{e(u)}</li>" for u in ai.unanswered[:20])
+        unanswered = (f'<details><summary>{len(ai.unanswered)} question(s) the agent could not '
+                      f'answer</summary><ul class="small">{items}</ul></details>')
+    return f"""<h2>Model contributions <span class="tag">AI generated</span></h2>
+<p class="lede">Written by an agent, validated against the scan, and kept separate from it.
+{e(ai.answered_questions)} contribution(s) merged from {e(provenance)}.</p>
+{insights}
+{rejected}
+{unanswered}"""

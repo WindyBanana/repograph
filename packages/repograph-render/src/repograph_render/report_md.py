@@ -177,8 +177,33 @@ def render(result: ScanResult, mermaid: Dict[str, str]) -> str:
         add(_table(["File", "Commits"],
                    [[f"`{h.get('file')}`", str(h.get("changes"))] for h in result.git.hotspots], limit=25))
 
+    if result.ai.present:
+        ai = result.ai
+        add("## 11. Model contributions\n")
+        add(f"> Written by **{ai.provenance.tool} {ai.provenance.model}** on "
+            f"{ai.provenance.generated_at}, validated against the scan. This section is "
+            f"judgement, not measurement — everything above it is machine-derived.\n")
+        for app in result.apps:
+            if app.ai_summary:
+                add(f"**{app.name}** — {app.ai_summary}\n")
+                for item in app.ai_responsibilities:
+                    add(f"- {item}")
+                if app.ai_responsibilities:
+                    add("")
+        if ai.insights:
+            add(_table(["Kind", "Severity", "Insight", "Evidence"],
+                       [[i.kind, i.severity, f"**{i.title}** — {i.detail}",
+                         ", ".join(f"`{x}`" for x in i.evidence)] for i in ai.insights]))
+        assessed = [f for f in result.findings if f.ai_assessment]
+        if assessed:
+            add("### Finding assessments\n")
+            add(_table(["Finding", "Assessment", "Reasoning"],
+                       [[f.title, f.ai_assessment, f.ai_reasoning] for f in assessed]))
+        if ai.rejected:
+            add(f"_{len(ai.rejected)} contribution(s) were rejected on merge._\n")
+
     if meta.warnings:
-        add("## 11. Scan notes\n")
+        add("## 12. Scan notes\n")
         for warning in meta.warnings:
             add(f"- {warning}")
         add("")

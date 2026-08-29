@@ -5,12 +5,15 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 import webbrowser
 from typing import List, Optional, Sequence
 
+from repograph_core import enrich as enrich_mod
 from repograph_core.model import ScanResult
 from repograph_core.scan import VERSION, ScanOptions, scan
+from repograph_render import agentpack
 from repograph_render.render import ALL_FORMATS, DEFAULT_FORMATS, render_all
 
 from .console import SEVERITY_COLOUR, Console
@@ -37,6 +40,9 @@ def build_parser() -> argparse.ArgumentParser:
   repograph scan . --online                 also check dependencies against OSV.dev
   repograph scan . --format html,pdf,xlsx   only produce some formats
   repograph scan . --open                   open the HTML report when finished
+  repograph agent ./repograph-out           show how to enrich the scan with an AI agent
+  repograph agent ./repograph-out --run claude   run the agent for you
+  repograph enrich ./repograph-out          merge an agent's answers back into the reports
   repograph tui                             browse the last scan in the terminal
   repograph serve ./repograph-out           serve the report over http
   repograph summary ./repograph-out         print the headline numbers again
@@ -83,6 +89,32 @@ def build_parser() -> argparse.ArgumentParser:
     summary_parser.add_argument("path", nargs="?", default="repograph-out",
                                 help="output folder or repograph.json")
 
+    agent_parser = sub.add_parser(
+        "agent", help="enrich a scan with an AI agent (optional; nothing is sent anywhere by "
+                      "repograph itself)")
+    agent_parser.add_argument("path", nargs="?", default="repograph-out",
+                              help="output folder from a previous scan")
+    agent_parser.add_argument("--run", metavar="TOOL", default="",
+                              help=f"launch an agent CLI: {', '.join(sorted(agentpack.AGENT_TOOLS))}")
+    agent_parser.add_argument("--yes", action="store_true", help="do not ask before running")
+    agent_parser.add_argument("--print-prompt", action="store_true",
+                              help="print the instructions instead of the commands")
+    agent_parser.add_argument("--write-agents-md", nargs="?", const="AGENTS.md", default="",
+                              metavar="FILE",
+                              help="add a pointer to the scan in the repository's agent file "
+                                   "(default AGENTS.md; try CLAUDE.md) so any agent opening the "
+                                   "repo finds the analysis")
+
+    enrich_parser = sub.add_parser(
+        "enrich", help="validate an agent's enrichment.json, merge it and re-render")
+    enrich_parser.add_argument("path", nargs="?", default="repograph-out",
+                               help="output folder, or a path to an enrichment.json")
+    enrich_parser.add_argument("--format", default="all", help="formats to re-render")
+    enrich_parser.add_argument("--no-render", action="store_true",
+                               help="merge into repograph.json without re-rendering")
+    enrich_parser.add_argument("--allow-unsupported", action="store_true",
+                               help="accept risks that carry no file:line evidence")
+
     render_parser = sub.add_parser("render", help="re-render outputs from an existing repograph.json")
     render_parser.add_argument("json_path", help="path to repograph.json")
     render_parser.add_argument("-o", "--output", default="", help="output folder")
@@ -106,6 +138,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return cmd_summary(args)
     if args.command == "render":
         return cmd_render(args)
+    if args.command == "agent":
+        return cmd_agent(args)
+    if args.command == "enrich":
+        return cmd_enrich(args)
     parser.print_help()
     return 1
 
@@ -248,6 +284,8 @@ def print_summary(console: Console, result: ScanResult, output_dir: str, rendere
     console.header("Output", output_dir)
     console.item("Interactive report", os.path.join(output_dir, "index.html"))
     console.item("Agent report", os.path.join(output_dir, "AI-REPORT.md"))
+    if os.path.exists(os.path.join(output_dir, "AGENT-INSTRUCTIONS.md")):
+        console.item("Optional AI pass", f"repograph agent {output_dir}")
     console.item("PDF / deck / workbook", "report.pdf · presentation.pptx · report.xlsx")
     if rendered is not None:
         console.item("Files written", str(len(rendered.files)))
@@ -305,6 +343,167 @@ def cmd_summary(args) -> int:
     result = load_result(args.path)
     console = Console()
     print_summary(console, result, os.path.dirname(os.path.abspath(args.path)))
+    return 0
+
+
+def _output_dir_of(path: str) -> str:
+    path = os.path.abspath(path)
+    if os.path.isfile(path):
+        return os.path.dirname(os.path.dirname(path)) if os.path.basename(
+            os.path.dirname(path)) == "agent" else os.path.dirname(path)
+    return path
+
+
+def cmd_agent(args) -> int:
+    console = Console()
+    output_dir = _output_dir_of(args.path)
+    try:
+        result = load_result(output_dir)
+    except SystemExit as exc:
+        console.write(console.paint(str(exc), "red"))
+        return 2
+
+    repo_root = result.meta.root
+    agentpack.write(result, output_dir, repo_root)
+    instructions_path = os.path.join(output_dir, "AGENT-INSTRUCTIONS.md")
+
+    if args.print_prompt:
+        with open(instructions_path, encoding="utf-8") as handle:
+            print(handle.read())
+        return 0
+
+    console.header("Enrich this scan with an AI agent",
+                   "repograph never calls a model itself. You run the agent you already pay for, "
+                   "on your machine.")
+    console.write()
+    console.write("  What it adds: intent, business meaning, a judgement on every finding,")
+    console.write("  and a ranked view of the risks — the parts a scanner cannot produce.")
+    console.write()
+    console.item("Instructions", instructions_path)
+    console.item("Open questions", os.path.join(output_dir, "agent", "enrichment-request.json"))
+    console.item("Answer schema", os.path.join(output_dir, "agent", "enrichment.schema.json"))
+
+    if args.write_agents_md:
+        path, action = agentpack.write_agents_md(result, output_dir, repo_root,
+                                                 args.write_agents_md)
+        colour = "green" if action != "unchanged" else "grey"
+        console.item(f"Agent file {action}", path, colour)
+
+    detected = agentpack.detect_tools()
+    console.header("Run one of these from " + repo_root)
+    if detected:
+        for key, label, _path in detected:
+            console.write(f"  {console.paint(label.ljust(18), 'grey')} "
+                          f"{console.paint(agentpack.command_for(key, output_dir, repo_root), 'cyan')}")
+    else:
+        console.write(console.paint("  No agent CLI found on this machine. Any of these work:",
+                                    "grey"))
+        for key, (label, _executable, _) in sorted(agentpack.AGENT_TOOLS.items()):
+            console.write(f"  {console.paint(label.ljust(18), 'grey')} "
+                          f"{console.paint(agentpack.command_for(key, output_dir, repo_root), 'cyan')}")
+    console.write()
+    console.write("  Or simply open your agent in the repository and tell it:")
+    console.write(console.paint(f"    \"Follow {agentpack.display_path(instructions_path, repo_root)}\"",
+                                "cyan"))
+    console.header("When the agent is done")
+    console.write(f"  {console.paint(f'repograph enrich {output_dir}', 'cyan')}")
+    console.write("  Validates the answers, merges what passes, reports what it rejected,")
+    console.write("  and re-renders every report with the model's contributions labelled.")
+    console.write()
+
+    if not args.run:
+        return 0
+
+    key = args.run.lower()
+    if key not in agentpack.AGENT_TOOLS:
+        console.write(console.paint(f"unknown agent '{args.run}'. Known: "
+                                    f"{', '.join(sorted(agentpack.AGENT_TOOLS))}", "red"))
+        return 2
+    label, executable, _template = agentpack.AGENT_TOOLS[key]
+    if not any(k == key for k, _, _ in detected):
+        console.write(console.paint(f"{label} ({executable}) is not on PATH.", "red"))
+        return 2
+    command = agentpack.command_for(key, output_dir, repo_root)
+    console.header("About to run", f"in {repo_root}")
+    console.write(f"  {console.paint(command, 'cyan')}")
+    console.write(console.paint("  This sends repository content to that tool's provider under "
+                                "your own account.", "grey"))
+    if not args.yes:
+        try:
+            answer = input("  continue? [y/N] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            answer = ""
+        if answer not in ("y", "yes"):
+            console.write("  cancelled")
+            return 0
+    console.write()
+    try:
+        completed = subprocess.run(command, shell=True, cwd=repo_root, check=False)
+    except OSError as exc:
+        console.write(console.paint(f"could not start {executable}: {exc}", "red"))
+        return 1
+    if completed.returncode != 0:
+        console.write(console.paint(f"{label} exited with code {completed.returncode}", "yellow"))
+    enrichment = enrich_mod.enrichment_path(output_dir)
+    if os.path.exists(enrichment):
+        console.write(console.paint(f"\nfound {enrichment} — merging", "green"))
+        return _merge(console, output_dir, enrichment, list(DEFAULT_FORMATS), True)
+    console.write(console.paint(f"\nno {enrichment} was written; nothing to merge", "yellow"))
+    return 0
+
+
+def cmd_enrich(args) -> int:
+    console = Console()
+    path = os.path.abspath(args.path)
+    if os.path.isfile(path):
+        enrichment_file = path
+        output_dir = _output_dir_of(path)
+    else:
+        output_dir = path
+        enrichment_file = enrich_mod.enrichment_path(output_dir)
+    if not os.path.exists(enrichment_file):
+        console.write(console.paint(f"no enrichment file at {enrichment_file}", "red"))
+        console.write(f"run  {console.paint(f'repograph agent {output_dir}', 'cyan')}  first")
+        return 2
+    formats = [] if args.no_render else _formats(args.format)
+    return _merge(console, output_dir, enrichment_file, formats, not args.allow_unsupported)
+
+
+def _merge(console: Console, output_dir: str, enrichment_file: str, formats: Sequence[str],
+           require_evidence: bool) -> int:
+    result = load_result(output_dir)
+    try:
+        data = enrich_mod.load_enrichment(enrichment_file)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        console.write(console.paint(f"could not read {enrichment_file}: {exc}", "red"))
+        return 2
+
+    enrichment, rejected = enrich_mod.apply(result, data, require_evidence=require_evidence)
+
+    console.header("Enrichment merged", enrichment_file)
+    console.item("Source", f"{enrichment.provenance.tool} {enrichment.provenance.model}".strip())
+    console.item("Merged contributions", str(enrichment.answered_questions))
+    console.item("Insights", str(len(enrichment.insights)))
+    console.item("Rejected or corrected", str(len(rejected)), "yellow" if rejected else "")
+    for reason in rejected[:10]:
+        console.bullet(reason, "yellow")
+    if enrichment.unanswered:
+        console.item("Left unanswered", str(len(enrichment.unanswered)))
+
+    if enrichment.answered_questions == 0 and not enrichment.insights:
+        console.write(console.paint("\nnothing was merged — check the ids and the schema", "red"))
+        return 1
+
+    with open(os.path.join(output_dir, "repograph.json"), "w", encoding="utf-8") as handle:
+        handle.write(result.to_json())
+
+    if formats:
+        rendered = render_all(result, output_dir, formats=formats,
+                              progress=lambda message: console.status(message))
+        console.clear_status()
+        console.header("Re-rendered", output_dir)
+        console.item("Files written", str(len(rendered.files)))
+    console.write()
     return 0
 
 

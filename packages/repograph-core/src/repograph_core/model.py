@@ -98,6 +98,46 @@ class Component:
 
 
 @dataclass
+class AiProvenance:
+    """Who produced an enrichment, so a reader can weigh it."""
+
+    tool: str = ""            # claude-code | codex | gemini-cli | manual | ...
+    model: str = ""
+    generated_at: str = ""
+    request_version: str = ""
+    notes: str = ""
+
+
+@dataclass
+class AiInsight:
+    id: str
+    kind: str = "observation"  # risk | observation | recommendation | answer
+    title: str = ""
+    detail: str = ""
+    severity: str = "info"
+    confidence: str = "medium"
+    targets: List[str] = field(default_factory=list)
+    evidence: List[str] = field(default_factory=list)
+
+
+@dataclass
+class AiEnrichment:
+    """Optional layer written by an AI agent on top of the deterministic scan.
+
+    Kept in its own branch of the model, and every field it fills is labelled in
+    the reports, so the machine-checked facts and the model's judgement are never
+    confused with one another.
+    """
+
+    present: bool = False
+    provenance: AiProvenance = field(default_factory=AiProvenance)
+    insights: List[AiInsight] = field(default_factory=list)
+    unanswered: List[str] = field(default_factory=list)
+    rejected: List[str] = field(default_factory=list)
+    answered_questions: int = 0
+
+
+@dataclass
 class App:
     """A deployable/publishable unit. A monorepo has several; a plain repo one."""
 
@@ -116,6 +156,8 @@ class App:
     purpose: str = ""
     architecture_style: str = ""
     evidence: List[Evidence] = field(default_factory=list)
+    ai_summary: str = ""
+    ai_responsibilities: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -197,6 +239,8 @@ class Finding:
     remediation: str = ""
     references: List[str] = field(default_factory=list)
     app: str = ""
+    ai_assessment: str = ""   # true_positive | false_positive | needs_review
+    ai_reasoning: str = ""
 
 
 @dataclass
@@ -227,6 +271,7 @@ class Flow:
     nodes: List[FlowNode] = field(default_factory=list)
     edges: List[FlowEdge] = field(default_factory=list)
     entrypoint: str = ""
+    ai_narrative: str = ""
 
 
 @dataclass
@@ -351,6 +396,7 @@ class ScanResult:
     layers: Dict[str, int] = field(default_factory=dict)
     infrastructure: Dict[str, Any] = field(default_factory=dict)
     summary: Dict[str, Any] = field(default_factory=dict)
+    ai: AiEnrichment = field(default_factory=AiEnrichment)
 
     # -- convenience lookups -------------------------------------------------
     def app_by_id(self, app_id: str) -> Optional[App]:
@@ -364,6 +410,12 @@ class ScanResult:
 
     def findings_by_severity(self, severity: str) -> List[Finding]:
         return [f for f in self.findings if f.severity == severity]
+
+    def finding_by_id(self, finding_id: str) -> Optional[Finding]:
+        return next((f for f in self.findings if f.id == finding_id), None)
+
+    def flow_by_id(self, flow_id: str) -> Optional[Flow]:
+        return next((f for f in self.flows if f.id == flow_id), None)
 
     def to_dict(self) -> Dict[str, Any]:
         return _jsonable(self)
