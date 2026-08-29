@@ -59,6 +59,8 @@ def render(result: ScanResult, mermaid: Dict[str, str]) -> str:
     for app in result.apps:
         if app.description:
             add(f"**{app.name}** — {app.description}\n")
+        if app.purpose and app.purpose != app.description:
+            add(f"> Read from the code: {app.purpose}\n")
 
     add("## 3. Architecture diagrams\n")
     add("### System context (C4 level 1)\n")

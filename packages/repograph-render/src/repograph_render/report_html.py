@@ -302,16 +302,24 @@ def _apps(result: ScanResult, diagrams: Dict[str, str], mermaid: Dict[str, str])
     for app in result.apps:
         components = [c for c in result.components if c.app == app.id]
         systems = [s for s in result.external_systems if app.id in s.apps]
-        depends = [e_.target for e_ in result.edges if e_.kind == "depends" and e_.source == app.id]
-        depended = [e_.source for e_ in result.edges if e_.kind == "depends" and e_.target == app.id]
+        # "depends" comes from imports, "deploy" from compose depends_on — both
+        # are real relationships between applications.
+        kinds = ("depends", "deploy")
+        depends = [e_.target for e_ in result.edges if e_.kind in kinds and e_.source == app.id]
+        depended = [e_.source for e_ in result.edges if e_.kind in kinds and e_.target == app.id]
         names = {a.id: a.name for a in result.apps}
         diagram = diagrams.get(f"components-{app.id}", "")
         diagram_block = (f'<details><summary>Component diagram</summary>'
                          f'<div class="diagram">{diagram}</div></details>') if diagram else ""
+        purpose_block = ""
+        if app.purpose and app.purpose != app.description:
+            purpose_block = (f'<p class="small muted"><b>Read from the code:</b> '
+                             f'{e(app.purpose)}</p>')
         blocks.append(f"""<div class="panel">
 <h3 style="color:var(--ink);text-transform:none;font-size:15px">{e(app.name)}
  <span class="tag">{e(app.kind)}</span></h3>
-<p class="small muted">{e(app.description or 'No description found in a README or manifest.')}</p>
+<p class="small">{e(app.description or 'No description found in a README or manifest.')}</p>
+{purpose_block}
 <dl class="kv small">
   <dt>Root</dt><dd class="mono">{e(app.root or '.')}</dd>
   <dt>Architecture style</dt><dd>{e(app.architecture_style)}</dd>

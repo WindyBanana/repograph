@@ -27,6 +27,7 @@ from .model import (
     Edge,
     Endpoint,
     Evidence,
+    ExternalSystem,
     FileInfo,
     Finding,
     Metrics,
@@ -239,6 +240,8 @@ def scan(options: ScanOptions) -> ScanResult:
             system.apps = dedupe([app_of_file.get(ev.file, "") for ev in system.evidence if ev.file])
             system.apps = [a for a in system.apps if a]
 
+    _attribute_compose_systems(infra, external_systems, app_list)
+
     systems_by_file: Dict[str, List[str]] = defaultdict(list)
     for system in external_systems:
         for ev in system.evidence:
@@ -291,6 +294,24 @@ def scan(options: ScanOptions) -> ScanResult:
         )
 
     findings = _dedupe_findings(findings)
+
+    # ------------------------------------------------- 8b. inferred purpose
+    app_names = {a.id: a.name for a in app_list}
+    for app in app_list:
+        dependents = [app_names.get(e.source, "") for e in app_edges + infra_edges
+                      if e.target == app.id]
+        depends_on = [app_names.get(e.target, "") for e in app_edges + infra_edges
+                      if e.source == app.id]
+        app.purpose = apps_mod.infer_purpose(
+            app,
+            [e for e in endpoints if e.app == app.id],
+            [s for s in symbols if s.app == app.id],
+            [s for s in external_systems if app.id in s.apps],
+            [name for name in dependents if name],
+            [name for name in depends_on if name],
+        )
+        if not app.description:
+            app.description = app.purpose
 
     # ----------------------------------------------------------- 9. models
     options.notify("Deriving flows and models", 0, 0)
@@ -463,6 +484,36 @@ def _match_loosely(merged: Dict[Tuple[str, str], Dependency], name: str, ecosyst
     return None
 
 
+def _attribute_compose_systems(infra: InfraScanner, systems: Sequence[ExternalSystem],
+                               apps: Sequence[App]) -> None:
+    """A ``postgres:15`` service in compose belongs to the applications whose own
+    services declare ``depends_on`` it — not to whichever app happens to sit
+    closest to the compose file."""
+    by_name = {c["name"]: c for c in infra.containers}
+    app_by_dir = {a.root: a.id for a in apps if a.root}
+    service_system: Dict[str, str] = {}
+    for system in systems:
+        for evidence in system.evidence:
+            note = evidence.note or ""
+            if note.startswith("service "):
+                service_system[note[len("service "):].split(":")[0].strip()] = system.id
+    if not service_system:
+        return
+    by_id = {s.id: s for s in systems}
+    for container in infra.containers:
+        build = str(container.get("build", "")).strip("./")
+        app_id = app_by_dir.get(build)
+        if not app_id:
+            continue
+        for target in container.get("depends_on", []):
+            system_id = service_system.get(str(target))
+            if not system_id and str(target) in by_name:
+                continue
+            system = by_id.get(system_id or "")
+            if system is not None and app_id not in system.apps:
+                system.apps.append(app_id)
+
+
 def _container_edges(infra: InfraScanner, apps: Sequence[App]) -> List[Edge]:
     edges: List[Edge] = []
     by_name = {c["name"]: c for c in infra.containers}
@@ -504,7 +555,8 @@ def _summarise(result: ScanResult, ranks: Dict[str, float], fan_in: Dict[str, in
     root_readme = readmes.get("README.md") or readmes.get("readme.md") or ""
     purpose = apps_mod.readme_summary(root_readme, 600) if root_readme else ""
     if not purpose and result.apps:
-        purpose = result.apps[0].description
+        largest = max(result.apps, key=lambda a: a.loc)
+        purpose = largest.description or largest.purpose
 
     kinds = {app.kind for app in result.apps}
     if len(result.apps) > 1:

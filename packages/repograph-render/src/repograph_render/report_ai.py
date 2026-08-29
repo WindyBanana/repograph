@@ -93,7 +93,8 @@ frameworks: {', '.join(app.frameworks) or 'none detected'}
 size: {app.files} files, {app.loc} lines, {len(components)} components
 manifests: {', '.join(app.manifests) or 'none'}
 entrypoints: {', '.join(app.entrypoints) or 'none declared'}
-description: {app.description or 'not documented'}
+description (from README or manifest): {app.description or 'not documented'}
+inferred_purpose (derived from code, independent of any README): {app.purpose or 'n/a'}
 endpoints: {len(endpoints)}
 depends_on_apps: {', '.join(a.name for a in depends if a) or 'none'}
 depended_on_by: {', '.join(a.name for a in dependents if a) or 'none'}

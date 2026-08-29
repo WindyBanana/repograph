@@ -233,7 +233,9 @@ class AppBuilder:
                     mapping[f.rel] = root
                     break
             else:
-                mapping[f.rel] = ordered[-1] if ordered else ""
+                # A file above every application root belongs to the repository,
+                # not to whichever application happens to sort last.
+                mapping[f.rel] = "" if ordered and ordered[-1] else (ordered[-1] if ordered else "")
         return mapping
 
     # ------------------------------------------------------------ components
@@ -435,3 +437,124 @@ def build_apps(root: str, files: List[ScanFile], manifests: List[Manifest], repo
         apps.append(app)
 
     return apps, components, app_of_file
+
+
+# --------------------------------------------------------------- purpose
+
+_STOP_SEGMENTS = {
+    "api", "apis", "v1", "v2", "v3", "graphql", "rest", "rpc", "health", "healthz", "ready",
+    "readyz", "live", "livez", "metrics", "status", "ping", "docs", "swagger", "openapi",
+    "static", "assets", "public", "index", "root", "web", "app", "internal", "admin", "auth",
+    "callback", "webhook", "webhooks", "_next", "favicon.ico",
+}
+_GENERIC_TYPES = {
+    "config", "settings", "base", "main", "app", "application", "client", "server", "handler",
+    "handlers", "service", "services", "repository", "manager", "helper", "helpers", "utils",
+    "util", "error", "errors", "exception", "test", "tests", "mock", "factory", "builder",
+    "request", "response", "options", "result", "context", "logger", "middleware", "router",
+}
+_CRUD_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+def _singular(word: str) -> str:
+    lowered = word.lower()
+    if lowered.endswith("ies") and len(lowered) > 4:
+        return lowered[:-3] + "y"
+    if lowered.endswith("ses") or lowered.endswith("xes"):
+        return lowered[:-2]
+    if lowered.endswith("s") and not lowered.endswith("ss"):
+        return lowered[:-1]
+    return lowered
+
+
+def domain_nouns(endpoints: Sequence, symbols: Sequence, limit: int = 6) -> List[str]:
+    """The subjects this application actually deals with.
+
+    Route segments and entity type names beat a README, because they cannot go
+    stale without the code changing too.
+    """
+    counts: Dict[str, int] = {}
+
+    def bump(word: str, weight: int) -> None:
+        # "fulfil_order" and "OrderLine" are two nouns each, not one.
+        for token in re.split(r"[^a-zA-Z]+|(?<=[a-z0-9])(?=[A-Z])", str(word)):
+            if len(token) < 3:
+                continue
+            noun = _singular(token)
+            if noun in _STOP_SEGMENTS or noun in _GENERIC_TYPES:
+                continue
+            counts[noun] = counts.get(noun, 0) + weight
+
+    for endpoint in endpoints:
+        for segment in str(getattr(endpoint, "path", "")).split("/"):
+            if not segment or segment.startswith(("{", ":", "<", "*", "$")):
+                continue
+            bump(segment, 3)
+        handler = str(getattr(endpoint, "handler", ""))
+        for part in re.split(r"[._]|(?<=[a-z])(?=[A-Z])", handler):
+            bump(part, 1)
+
+    for symbol in symbols:
+        if symbol.kind in ("class", "struct", "record", "table", "message", "interface", "entity"):
+            name = symbol.name.rsplit(".", 1)[-1]
+            for suffix in ("Controller", "Service", "Repository", "Handler", "Model", "Entity",
+                           "Dto", "DTO", "Schema", "Resource", "Manager"):
+                if name.endswith(suffix) and len(name) > len(suffix):
+                    name = name[: -len(suffix)]
+                    break
+            for part in re.split(r"(?<=[a-z0-9])(?=[A-Z])|_", name):
+                bump(part, 2)
+
+    ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    return [noun for noun, weight in ranked if weight > 1][:limit]
+
+
+def infer_purpose(app: App, endpoints: Sequence, symbols: Sequence,
+                  systems: Sequence, dependent_names: Sequence[str] = (),
+                  depends_on_names: Sequence[str] = ()) -> str:
+    """A one-paragraph description derived only from code, for when there is no
+    README — or when the README no longer matches what the code does."""
+    nouns = domain_nouns(endpoints, symbols)
+    http = [e for e in endpoints if e.kind in ("http", "graphql", "grpc", "websocket")]
+    events = [e for e in endpoints if e.kind in ("event", "cron")]
+    commands = [e for e in endpoints if e.kind == "cli"]
+    stores = [s.name for s in systems if s.kind in ("database", "cache", "storage", "search")]
+    integrations = [s.name for s in systems if s.kind in ("api", "queue", "payment", "auth",
+                                                          "mail", "ai")]
+
+    role = {
+        "service": "Backend service", "frontend": "User interface", "job": "Background worker",
+        "library": "Shared library", "cli": "Command line tool", "infra": "Infrastructure code",
+        "docs": "Documentation",
+    }.get(app.kind, "Application")
+
+    sentences: List[str] = []
+    subject = ", ".join(nouns[:4]) if nouns else ""
+    opening = f"{role} written in {app.languages[0]}" if app.languages else role
+    if app.frameworks:
+        opening += f" using {', '.join(app.frameworks[:2])}"
+    if subject:
+        opening += f", built around {subject}"
+    sentences.append(opening + ".")
+
+    if http:
+        methods = {e.method for e in http}
+        shape = "CRUD-style" if methods & _CRUD_METHODS and "GET" in methods else "read-oriented"
+        sentences.append(f"Exposes {len(http)} {shape} endpoint(s)"
+                         + (f" over {', '.join(nouns[:3])}" if nouns else "") + ".")
+    if events:
+        sentences.append(f"Reacts to {len(events)} event or scheduled trigger(s).")
+    if commands:
+        sentences.append(f"Provides {len(commands)} command line entrypoint(s).")
+    if not (http or events or commands) and app.kind == "library":
+        sentences.append("Has no entrypoints of its own; it is consumed by other code"
+                         + (f" ({', '.join(dependent_names[:3])})" if dependent_names else "") + ".")
+    if stores:
+        sentences.append(f"Persists or caches data in {', '.join(dict.fromkeys(stores))[:120]}.")
+    if integrations:
+        sentences.append(f"Talks to {', '.join(dict.fromkeys(integrations))[:140]}.")
+    if depends_on_names:
+        sentences.append(f"Uses {', '.join(dict.fromkeys(depends_on_names))[:120]} from this repository.")
+    if dependent_names and app.kind != "library":
+        sentences.append(f"Depended on by {', '.join(dependent_names[:4])}.")
+    return " ".join(sentences)

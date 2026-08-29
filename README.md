@@ -114,6 +114,14 @@ from `file://`.
 
 ![3D dependency graph](docs/images/report-graph3d.png)
 
+### Read from the code, not from the README
+
+A README goes stale; the code cannot. Every application gets a purpose derived from its own
+routes, entity names, data stores and integrations — reported next to whatever the README claims,
+so you can see when the two disagree.
+
+![Applications view](docs/images/report-applications.png)
+
 ### Everything else
 
 | Area | What repograph reports |

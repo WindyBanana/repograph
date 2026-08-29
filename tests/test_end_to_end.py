@@ -229,3 +229,37 @@ class TestCli(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestInferredPurpose(unittest.TestCase):
+    """The README can be stale, so purpose is also derived from the code."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.result = scan(ScanOptions(root=SAMPLE, git_history=False))
+
+    def by_name(self, name):
+        return next(a for a in self.result.apps if a.name == name)
+
+    def test_api_purpose_names_its_domain_and_stores(self):
+        purpose = self.by_name("acme-api").purpose
+        self.assertIn("Backend service", purpose)
+        self.assertIn("order", purpose)
+        self.assertIn("PostgreSQL", purpose)
+        self.assertIn("acme-shared", purpose)
+
+    def test_library_purpose_names_its_consumers(self):
+        purpose = self.by_name("acme-shared").purpose
+        self.assertIn("Shared library", purpose)
+        self.assertIn("acme-api", purpose)
+
+    def test_frontend_is_not_credited_with_backend_stores(self):
+        purpose = self.by_name("@acme/web").purpose
+        self.assertIn("User interface", purpose)
+        self.assertNotIn("PostgreSQL", purpose)
+        self.assertNotIn("Kafka", purpose)
+
+    def test_worker_reports_event_triggers(self):
+        purpose = self.by_name("acme-worker").purpose
+        self.assertIn("Background worker", purpose)
+        self.assertIn("event", purpose)
