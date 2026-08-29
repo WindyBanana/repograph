@@ -89,7 +89,7 @@ The same program is both, on every platform:
 
 ```bash
 repograph scan .        # command line
-repograph ui            # desktop UI in your browser: pick a folder, scan, open the report
+repograph ui            # desktop app: pick a folder, scan, and land in the dashboard
 repograph tui           # terminal UI for browsing a scan over SSH (macOS/Linux)
 ```
 
@@ -259,7 +259,7 @@ repograph tui              # scans if there is no previous result, then opens th
 
 Ten views (overview, applications, components, endpoints, dependencies, findings, external
 systems, flows, infrastructure, files), `/` to filter, arrow keys or `hjkl` to move, `d` to toggle
-the detail pane, `?` for help.
+the detail pane, `o` to open the full graphical report in a browser, `?` for help.
 
 ## Using it with an AI agent
 

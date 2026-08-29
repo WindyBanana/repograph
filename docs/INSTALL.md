@@ -92,7 +92,7 @@ The same binary is both:
 | How you start it | What you get |
 |---|---|
 | `repograph scan .` (or any subcommand) | the CLI |
-| `repograph ui` | the desktop UI: pick a folder, scan, open the report |
+| `repograph ui` | the desktop app: pick a folder, scan, then browse the dashboard in place |
 | `repograph tui` | the terminal UI, for browsing a scan over SSH (macOS/Linux) |
 | double-clicking the app or Start Menu entry | the desktop UI |
 
