@@ -148,6 +148,7 @@ class TestNonSecurityHash(unittest.TestCase):
         self.assertFalse(declares_non_security_use("digest = hashlib.sha1(pw).hexdigest()"))
 
 
+@unittest.skipIf(os.name == "nt", "these commands are POSIX shell; see shell_supported()")
 class TestShellQuoting(unittest.TestCase):
     """These commands run through a shell, so the path must carry its quoting."""
 
@@ -178,6 +179,17 @@ class TestShellQuoting(unittest.TestCase):
         # Quoting must not make the copy-pasteable command ugly for normal paths.
         self.assertEqual(agentpack.command_for("claude", "/home/me/out", "/home/me"),
                          'claude -p "$(cat out/AGENT-INSTRUCTIONS.md)"')
+
+
+class TestWindowsDeclinesRatherThanMisleads(unittest.TestCase):
+    """cmd.exe leaves $(cat ...) untouched, so the agent would get literal text."""
+
+    def test_the_shell_form_is_declared_posix_only(self):
+        self.assertEqual(agentpack.shell_supported(), os.name != "nt")
+
+    def test_the_command_is_still_offered_for_a_posix_shell(self):
+        # It runs as written under WSL or Git Bash, so it stays printable.
+        self.assertIn("$(cat", agentpack.command_for("claude", "/tmp/out", "/tmp"))
 
 
 class TestScannerOnACatalogue(unittest.TestCase):

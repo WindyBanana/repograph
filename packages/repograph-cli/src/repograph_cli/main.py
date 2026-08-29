@@ -496,6 +496,11 @@ def cmd_agent(args) -> int:
             console.write("  cancelled")
             return 0
     console.write()
+    if not agentpack.shell_supported():
+        console.write(console.paint(
+            "  --run needs a POSIX shell; cmd.exe does not expand $(cat ...).", "yellow"))
+        console.write("  Run the command above in WSL, Git Bash, or paste the file yourself.")
+        return 2
     try:
         completed = subprocess.run(command, shell=True, cwd=repo_root, check=False)
     except OSError as exc:
@@ -635,6 +640,11 @@ def cmd_ask(args) -> int:
         if answer not in ("y", "yes"):
             console.write("  cancelled")
             return 0
+    if not agentpack.shell_supported():
+        console.write(console.paint(
+            "  --run needs a POSIX shell; cmd.exe does not expand $(cat ...).", "yellow"))
+        console.write("  Run the command above in WSL, Git Bash, or paste the file yourself.")
+        return 2
     completed = subprocess.run(command, shell=True, cwd=repo_root, check=False)
     return completed.returncode
 

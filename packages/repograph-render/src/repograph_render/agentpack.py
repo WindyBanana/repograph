@@ -48,6 +48,19 @@ def display_path(path: str, base: str) -> str:
     return path if relative.startswith("..") else relative
 
 
+def shell_supported() -> bool:
+    """Whether this machine can run the commands below itself.
+
+    They are POSIX shell: the instructions reach the agent through
+    "$(cat ...)". cmd.exe does not substitute that, so on Windows the agent
+    would be handed the literal text $(cat AGENT-INSTRUCTIONS.md) as its
+    prompt and answer about nothing — worse than declining, because it looks
+    like it worked. Printing the command is still useful there: it runs as
+    written in WSL, Git Bash or any POSIX shell.
+    """
+    return os.name != "nt"
+
+
 def quoted_path(path: str, base: str) -> str:
     """A display path safe to paste into a shell.
 
