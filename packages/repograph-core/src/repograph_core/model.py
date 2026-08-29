@@ -363,7 +363,7 @@ class Metrics:
 @dataclass
 class ScanMeta:
     tool: str = "repograph"
-    version: str = "0.1.0"
+    version: str = "0.1.1"
     schema_version: str = SCHEMA_VERSION
     generated_at: str = ""
     root: str = ""

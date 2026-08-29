@@ -44,7 +44,7 @@ from .security.secrets import scan_secrets
 from .util import count_lines, dedupe, title_case, truncate
 from .walker import ScanFile, Walker, load_text
 
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 
 ProgressFn = Callable[[str, int, int], None]
 
