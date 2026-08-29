@@ -9,6 +9,8 @@ __pycache__/
 .eggs/
 build/
 dist/
+smoke-out/
+*.spec.bak
 .venv/
 venv/
 .mypy_cache/

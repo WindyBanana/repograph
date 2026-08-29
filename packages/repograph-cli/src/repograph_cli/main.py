@@ -46,6 +46,7 @@ def build_parser() -> argparse.ArgumentParser:
   repograph enrich ./repograph-out          merge an agent's answers back into the reports
   repograph ask "where do I add refunds?"   ask an agent a question with the scan as context
   repograph ask --suggest                   questions worth asking about this repository
+  repograph ui                              open the desktop UI in a browser
   repograph tui                             browse the last scan in the terminal
   repograph serve ./repograph-out           serve the report over http
   repograph summary ./repograph-out         print the headline numbers again
@@ -80,6 +81,14 @@ def build_parser() -> argparse.ArgumentParser:
     scan_parser.add_argument("--json", action="store_true", dest="json_out",
                              help="print the scan summary as JSON to stdout")
     scan_parser.add_argument("-q", "--quiet", action="store_true", help="only print errors")
+
+    ui_parser = sub.add_parser("ui", help="open the desktop UI (a local page in your browser)")
+    ui_parser.add_argument("path", nargs="?", default="",
+                           help="repository to pre-fill in the folder box")
+    ui_parser.add_argument("-p", "--port", type=int, default=7373)
+    ui_parser.add_argument("--no-open", action="store_true",
+                           help="do not open a browser window automatically")
+    ui_parser.add_argument("-q", "--quiet", action="store_true")
 
     tui_parser = sub.add_parser("tui", help="browse a scan in a terminal UI")
     tui_parser.add_argument("path", nargs="?", default=".",
@@ -149,6 +158,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 0
     if args.command == "scan":
         return cmd_scan(args)
+    if args.command == "ui":
+        return cmd_ui(args)
     if args.command == "tui":
         return cmd_tui(args)
     if args.command == "serve":
@@ -331,6 +342,15 @@ def print_summary(console: Console, result: ScanResult, output_dir: str, rendere
         for name, reason in (rendered.skipped or {}).items():
             console.bullet(f"failed to write {name}: {reason}", "yellow")
     console.write()
+
+
+def cmd_ui(args) -> int:
+    try:
+        from repograph_ui.server import serve
+    except ImportError as exc:
+        print(f"the desktop UI is not available: {exc}", file=sys.stderr)
+        return 1
+    return serve(args.path, port=args.port, open_browser=not args.no_open, quiet=args.quiet)
 
 
 def cmd_tui(args) -> int:

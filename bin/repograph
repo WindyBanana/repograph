@@ -29,5 +29,5 @@ if sys.version_info < (3, 9):
     raise SystemExit(1)
 PYCHECK
 
-export PYTHONPATH="$ROOT/packages/repograph-core/src:$ROOT/packages/repograph-render/src:$ROOT/packages/repograph-cli/src:$ROOT/packages/repograph-tui/src${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH="$ROOT/packages/repograph-core/src:$ROOT/packages/repograph-render/src:$ROOT/packages/repograph-cli/src:$ROOT/packages/repograph-tui/src:$ROOT/packages/repograph-ui/src${PYTHONPATH:+:$PYTHONPATH}"
 exec "$PYTHON" -m repograph_cli "$@"

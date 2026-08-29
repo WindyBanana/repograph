@@ -1,5 +1,5 @@
 PYTHON ?= python3
-SRC := packages/repograph-core/src:packages/repograph-render/src:packages/repograph-cli/src:packages/repograph-tui/src
+SRC := packages/repograph-core/src:packages/repograph-render/src:packages/repograph-cli/src:packages/repograph-tui/src:packages/repograph-ui/src
 OUT ?= repograph-out
 TARGET ?= .
 
@@ -8,10 +8,13 @@ help:
 	@echo "repograph — make targets"
 	@echo "  make scan TARGET=<path>   scan a repository (default: this one)"
 	@echo "  make demo                 scan the bundled example monorepo"
+	@echo "  make ui                   open the desktop UI in a browser"
 	@echo "  make tui                  browse the last scan in the terminal"
 	@echo "  make serve                serve the HTML report on :8000"
 	@echo "  make test                 run the test suite"
 	@echo "  make lint                 run ruff (if installed)"
+	@echo "  make binary               build a standalone executable for this machine"
+	@echo "  make app                  + the .app bundle / .desktop entry / shortcut"
 	@echo "  make install              install with pipx (falls back to pip --user)"
 	@echo "  make clean                remove generated output"
 
@@ -22,6 +25,10 @@ scan:
 .PHONY: demo
 demo:
 	./bin/repograph scan examples/sample-monorepo -o examples/sample-monorepo-report
+
+.PHONY: ui
+ui:
+	./bin/repograph ui
 
 .PHONY: tui
 tui:
@@ -39,11 +46,21 @@ test:
 lint:
 	@command -v ruff >/dev/null 2>&1 && ruff check . || echo "ruff not installed — skipping"
 
+.PHONY: binary
+binary:
+	$(PYTHON) -m PyInstaller --clean --noconfirm --distpath dist --workpath build/pyinstaller packaging/repograph.spec
+	@echo "built dist/repograph"
+
+.PHONY: app
+app: binary
+	$(PYTHON) packaging/bundle.py dist/repograph -o dist
+	@echo "built the desktop wrapper in dist/"
+
 .PHONY: install
 install:
 	@command -v pipx >/dev/null 2>&1 && pipx install --force . || $(PYTHON) -m pip install --user .
 
 .PHONY: clean
 clean:
-	rm -rf $(OUT) examples/sample-monorepo-report build dist *.egg-info
+	rm -rf $(OUT) examples/sample-monorepo-report build dist *.egg-info smoke-out
 	find . -name __pycache__ -type d -prune -exec rm -rf {} +

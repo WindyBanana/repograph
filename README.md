@@ -63,22 +63,41 @@ repograph answers those questions in seconds, in a form both humans and AI agent
 
 ## Install
 
-repograph needs **Python 3.9+** and nothing else. It runs on macOS and Linux.
+**Windows, macOS and Linux.** Either take a standalone build — one ~9 MB executable, no Python
+needed — or run it from source with Python 3.9+.
 
 ```bash
+# from source: no install at all
 git clone https://github.com/WindyBanana/repograph
-cd repograph
+cd repograph && ./bin/repograph scan /path/to/repo
 
-# option 1 — no install at all
-./bin/repograph scan /path/to/repo
-
-# option 2 — put it on your PATH
-./scripts/install.sh          # uses pipx if available, otherwise symlinks into ~/.local/bin
-repograph scan /path/to/repo
+# or put it on your PATH, with a launcher entry
+./scripts/install.sh
 ```
+
+Standalone builds are produced by the release workflow for Windows (`.exe`), macOS (`.app`,
+Apple silicon and Intel) and Linux (binary + `.desktop` entry). Build one yourself with
+`make binary`, or push a tag to have CI publish all four. Full instructions, including the
+unsigned-app warnings, are in [docs/INSTALL.md](docs/INSTALL.md).
 
 There are **no required third-party dependencies**. XLSX, PPTX, PDF, SVG and the interactive
 report are all written from scratch, so a bare interpreter is enough.
+
+## Terminal or window
+
+The same program is both, on every platform:
+
+```bash
+repograph scan .        # command line
+repograph ui            # desktop UI in your browser: pick a folder, scan, open the report
+repograph tui           # terminal UI for browsing a scan over SSH (macOS/Linux)
+```
+
+Double-clicking the app or the Start Menu entry opens the UI. It binds to `127.0.0.1` only, mints
+a fresh token per run and rejects cross-origin requests, so nothing outside your machine can drive
+it.
+
+![The desktop UI](docs/images/desktop-ui.png)
 
 ## Use
 

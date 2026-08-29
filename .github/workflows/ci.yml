@@ -24,6 +24,17 @@ jobs:
         run: make test
       - name: Scan repograph with repograph
         run: ./bin/repograph scan . -o /tmp/self-scan --quiet
+
+      - name: The desktop UI must start and serve its page
+        shell: bash
+        run: |
+          ./bin/repograph ui --no-open --quiet --port 7999 &
+          server=$!
+          sleep 4
+          curl -sf http://127.0.0.1:7999/ | grep -q "repograph"
+          code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:7999/api/status)
+          [ "$code" = "403" ] || { echo "the API answered $code without a token"; exit 1; }
+          kill $server
       - name: Check the output is complete
         shell: bash
         run: |
