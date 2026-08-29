@@ -127,5 +127,5 @@ def spdx(result: ScanResult) -> Dict[str, Any]:
 
 
 def _stable_uuid(seed: str) -> str:
-    digest = hashlib.sha1(seed.encode()).hexdigest()
+    digest = hashlib.sha1(seed.encode(), usedforsecurity=False).hexdigest()
     return f"{digest[:8]}-{digest[8:12]}-{digest[12:16]}-{digest[16:20]}-{digest[20:32]}"

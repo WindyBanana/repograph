@@ -16,6 +16,7 @@ from . import archimate as archimate_mod
 from . import c4 as c4_mod
 from . import gitinfo, graph, narrative
 from . import profile as profile_mod
+from .evidence_quality import optional_import_names
 from .flows import FlowBuilder
 from .infra import InfraScanner
 from .integrations import IntegrationScanner, classify_env_var
@@ -100,6 +101,7 @@ def scan(options: ScanOptions) -> ScanResult:
     # ------------------------------- 2. read, analyse, collect in one pass
     manifests: List[Manifest] = []
     lock_deps: List[Dependency] = []
+    optional_imports: set = set()
     lockfile_paths: List[str] = []
     tsconfigs: Dict[str, str] = {}
     readmes: Dict[str, str] = {}
@@ -162,6 +164,7 @@ def scan(options: ScanOptions) -> ScanResult:
                     entry_texts[sf.rel] = text
 
         if text:
+            optional_imports.update(optional_import_names(text))
             integrations.scan_file(sf.rel, text, "", sf.kind)
             findings.extend(scan_secrets(sf.rel, text))
             findings.extend(scan_patterns(sf.rel, text, sf.language))
@@ -224,6 +227,12 @@ def scan(options: ScanOptions) -> ScanResult:
     # ---------------------------------------------------- 5. dependencies
     options.notify("Reconciling dependencies", 0, 0)
     dependencies, undeclared = _reconcile_dependencies(manifests, lock_deps, external_usage, app_of_file)
+    # An import wrapped in try/except ImportError is optional by construction:
+    # the author already wrote the fallback. Asking them to declare it would
+    # make the declaration a lie on the interpreters the fallback exists for.
+    for name in list(undeclared):
+        if name in optional_imports:
+            del undeclared[name]
 
     # -------------------------------------------- 6. external integrations
     options.notify("Detecting external systems", 0, 0)
@@ -542,7 +551,12 @@ def _dedupe_findings(findings: Sequence[Finding]) -> List[Finding]:
     out: List[Finding] = []
     order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
     for finding in findings:
-        key = (finding.file, finding.line, finding.identifier)
+        # Without a file, every finding from one rule shares a key and all but
+        # the first are dropped — that silently swallowed the second missing
+        # lockfile in any repository with two ecosystems. Fall back to the
+        # finding's own id, which is unique by construction.
+        key = ((finding.file, finding.line, finding.identifier) if finding.file
+               else ("", 0, finding.id))
         if key in seen:
             continue
         seen.add(key)

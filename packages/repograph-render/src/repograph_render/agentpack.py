@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -47,9 +48,20 @@ def display_path(path: str, base: str) -> str:
     return path if relative.startswith("..") else relative
 
 
+def quoted_path(path: str, base: str) -> str:
+    """A display path safe to paste into a shell.
+
+    These commands run through a shell because of the $(cat ...) around the
+    instructions, so the path has to carry its own quoting: an output folder
+    called "My Project" would otherwise split into two arguments, and one
+    containing a quote could close the substitution and run whatever follows.
+    """
+    return shlex.quote(display_path(path, base))
+
+
 def command_for(key: str, output_dir: str, repo_root: str) -> str:
     label_command = AGENT_TOOLS.get(key, AGENT_TOOLS["claude"])[2]
-    instructions = display_path(os.path.join(output_dir, "AGENT-INSTRUCTIONS.md"), repo_root)
+    instructions = quoted_path(os.path.join(output_dir, "AGENT-INSTRUCTIONS.md"), repo_root)
     return label_command.format(instructions=instructions)
 
 

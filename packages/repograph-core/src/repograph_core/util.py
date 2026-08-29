@@ -18,7 +18,7 @@ def slug(*parts: str, maxlen: int = 80) -> str:
     raw = unicodedata.normalize("NFKD", raw).encode("ascii", "ignore").decode()
     out = _SLUG_RE.sub("-", raw).strip("-").lower()
     if len(out) > maxlen:
-        digest = hashlib.sha1(out.encode()).hexdigest()[:8]
+        digest = hashlib.sha1(out.encode(), usedforsecurity=False).hexdigest()[:8]
         out = out[: maxlen - 9].rstrip("-") + "-" + digest
     return out or "n"
 

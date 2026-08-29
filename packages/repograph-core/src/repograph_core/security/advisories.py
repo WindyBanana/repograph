@@ -82,21 +82,31 @@ def hygiene_findings(dependencies: Sequence[Dependency], lockfiles: Sequence[str
         "rubygems": ("Gemfile.lock",), "pub": ("pubspec.lock",), "nuget": ("packages.lock.json",),
     }
     lock_names = {os.path.basename(p) for p in lockfiles}
+    # The missing file has no path, so point at the manifest that declares the
+    # dependencies instead: a finding nobody can navigate to is not actionable.
+    manifest_for: Dict[str, str] = {}
+    for dep in dependencies:
+        if dep.declared_in and dep.ecosystem not in manifest_for:
+            manifest_for[dep.ecosystem] = dep.declared_in[0]
     for ecosystem in sorted(set(ecosystems)):
         expected = lock_by_ecosystem.get(ecosystem)
         if not expected:
             continue
         if not any(name in lock_names for name in expected):
+            manifest = manifest_for.get(ecosystem, "")
+            where = os.path.dirname(manifest) or "the project root"
             findings.append(
                 Finding(
                     id=slug("dep", "nolock", ecosystem),
                     title=f"No lockfile for the {ecosystem} dependencies",
                     severity="low",
                     category="dependency",
+                    file=manifest,
                     identifier="RG-DEP-NOLOCK",
                     confidence="high",
-                    remediation=f"Commit one of {', '.join(expected)} so builds are reproducible and "
-                                f"vulnerability scanning can see resolved versions.",
+                    remediation=f"Commit one of {', '.join(expected)} next to {manifest or 'the manifest'} "
+                                f"in {where}, so builds are reproducible and vulnerability scanning can "
+                                f"see resolved versions.",
                 )
             )
 

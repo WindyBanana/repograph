@@ -11,6 +11,11 @@ import re
 from dataclasses import dataclass, field
 from typing import Iterator, List, Optional, Sequence
 
+from ..evidence_quality import (
+    declares_non_security_use,
+    is_pattern_definition,
+    is_xml_namespace,
+)
 from ..model import Finding
 from ..util import slug
 
@@ -291,10 +296,27 @@ def scan_patterns(rel: str, text: str, language: str, max_per_rule: int = 5) -> 
             line = lines[line_no - 1].strip() if line_no - 1 < len(lines) else ""
             if _is_comment(line, language) or _inside(doc_spans, match.start()):
                 continue
+            # A rule table matching its own rules is the single loudest source
+            # of noise when this is pointed at a scanner, a linter or anything
+            # else that catalogues insecure code rather than containing it.
+            if is_pattern_definition(line):
+                continue
+            if rule.id in _URI_RULES and is_xml_namespace(line, match.group(0)):
+                continue
+            if rule.id in _HASH_RULES and declares_non_security_use(line):
+                continue
             yield _finding(rule, rel, line_no, line[:200], fixture)
             count += 1
             if count >= limit:
                 break
+
+
+# Rules about network addresses. An XML namespace URI is spelled like an
+# address but is only ever a name, so these must not fire on one.
+_URI_RULES = frozenset({"http-url"})
+
+# Digest rules, which a caller can opt out of by declaring intent.
+_HASH_RULES = frozenset({"weak-hash"})
 
 
 def _whole_file_hit(rule: Rule, text: str) -> bool:

@@ -610,7 +610,7 @@ def cmd_ask(args) -> int:
                          sorted(agentpack.AGENT_TOOLS.items())]
     for key, label, _path in tools:
         command = agentpack.AGENT_TOOLS[key][2].format(
-            instructions=agentpack.display_path(prompt_file, repo_root))
+            instructions=agentpack.quoted_path(prompt_file, repo_root))
         console.write(f"  {console.paint(label.ljust(18), 'grey')} {console.paint(command, 'cyan')}")
     console.write()
 
@@ -624,7 +624,7 @@ def cmd_ask(args) -> int:
         console.write(console.paint(f"{agentpack.AGENT_TOOLS[key][0]} is not on PATH", "red"))
         return 2
     command = agentpack.AGENT_TOOLS[key][2].format(
-        instructions=agentpack.display_path(prompt_file, repo_root))
+        instructions=agentpack.quoted_path(prompt_file, repo_root))
     console.header("About to run", f"in {repo_root}")
     console.write(f"  {console.paint(command, 'cyan')}")
     if not args.yes:

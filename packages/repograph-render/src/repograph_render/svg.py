@@ -23,7 +23,7 @@ def diagram_uid(diagram: Diagram) -> str:
     a hidden tab and then renders as nothing.
     """
     seed = f"{diagram.kind}:{diagram.title}:{len(diagram.nodes)}"
-    return hashlib.sha1(seed.encode()).hexdigest()[:8]
+    return hashlib.sha1(seed.encode(), usedforsecurity=False).hexdigest()[:8]
 
 
 def _defs(uid: str) -> str:

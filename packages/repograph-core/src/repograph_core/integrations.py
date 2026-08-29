@@ -11,6 +11,14 @@ import re
 from dataclasses import dataclass
 from typing import Dict, List, Tuple
 
+from .evidence_quality import (
+    PROSE_KINDS,
+    is_comment_line,
+    is_pattern_catalogue,
+    is_pattern_definition,
+    is_xml_namespace,
+    spans_whole_raw_string,
+)
 from .model import Evidence, ExternalSystem
 from .util import slug
 
@@ -170,6 +178,20 @@ _ENV_RE = re.compile(
 )
 
 
+_PY_DOCSTRING = re.compile(r'("""|\'\'\')(?:.|\n)*?\1')
+
+
+def _docstring_spans(rel: str, text: str) -> List[Tuple[int, int]]:
+    """Byte ranges of Python docstrings — prose that happens to live in a .py."""
+    if not rel.endswith(".py"):
+        return []
+    return [(m.start(), m.end()) for m in _PY_DOCSTRING.finditer(text)]
+
+
+def _inside(spans: List[Tuple[int, int]], position: int) -> bool:
+    return any(start <= position < end for start, end in spans)
+
+
 @dataclass
 class IntegrationHit:
     system_id: str
@@ -186,6 +208,11 @@ class IntegrationScanner:
         self.systems: Dict[str, ExternalSystem] = {}
         self.env_vars: Dict[str, List[str]] = {}
         self.hosts: Dict[str, List[Evidence]] = {}
+        # A system is only real once something that runs has referenced it.
+        # Prose and pattern tables can corroborate, never establish.
+        self.established: set = set()
+        self._prose_lines: set = set()
+        self._defining_lines: set = set()
 
     def scan_file(self, rel: str, text: str, app: str, kind: str) -> None:
         if not text:
@@ -193,20 +220,42 @@ class IntegrationScanner:
         lines = text.splitlines()
         head = text if len(text) < 400_000 else text[:400_000]
 
+        prose = kind in PROSE_KINDS
+        doc_spans = _docstring_spans(rel, head)
+
+        # Collect first, judge second: whether a line defines a pattern or uses
+        # a service is partly a property of the file it sits in.
+        hits: List[Tuple[str, str, str, str, int, str]] = []
         for sid, name, system_kind, tech, pattern in _COMPILED:
             match = pattern.search(head)
             if match is None:
                 continue
             line_no = head.count("\n", 0, match.start()) + 1
             snippet = lines[line_no - 1].strip()[:160] if line_no - 1 < len(lines) else ""
+            if _inside(doc_spans, match.start()) or is_comment_line(snippet):
+                self._prose_lines.add((rel, line_no))
+            if spans_whole_raw_string(snippet, match.group(0)):
+                self._defining_lines.add((rel, line_no))
+            hits.append((sid, name, system_kind, tech, line_no, snippet))
+
+        catalogue = is_pattern_catalogue([h[5] for h in hits])
+        for sid, name, system_kind, tech, line_no, snippet in hits:
+            documented = prose or (rel, line_no) in self._prose_lines
+            defining = (catalogue or is_pattern_definition(snippet)
+                        or (rel, line_no) in self._defining_lines)
             system = self.systems.get(sid)
             if system is None:
                 system = ExternalSystem(id=f"ext-{sid}", name=name, kind=system_kind, technology=tech)
                 self.systems[sid] = system
+            note = "mentioned in prose" if documented else (
+                "matches a pattern definition" if defining else "")
             if len(system.evidence) < 12:
-                system.evidence.append(Evidence(file=rel, line=line_no, snippet=snippet))
-            if app and app not in system.apps:
-                system.apps.append(app)
+                system.evidence.append(
+                    Evidence(file=rel, line=line_no, snippet=snippet, note=note))
+            if not documented and not defining:
+                self.established.add(sid)
+                if app and app not in system.apps:
+                    system.apps.append(app)
 
         if kind in ("source", "config", "infra"):
             self._scan_urls(rel, head, lines, app)
@@ -219,6 +268,9 @@ class IntegrationScanner:
                 continue
             line_no = text.count("\n", 0, match.start()) + 1
             snippet = lines[line_no - 1].strip()[:160] if line_no - 1 < len(lines) else ""
+            # www.w3.org in an xmlns is the vocabulary's name; nothing calls it.
+            if is_xml_namespace(snippet, match.group(0)):
+                continue
             bucket = self.hosts.setdefault(host, [])
             if len(bucket) < 6:
                 bucket.append(Evidence(file=rel, line=line_no, snippet=snippet, note=app))
@@ -233,6 +285,12 @@ class IntegrationScanner:
                 files.append(rel)
 
     def finish(self, min_host_hits: int = 1) -> List[ExternalSystem]:
+        # Drop anything only ever named by prose or by a signature table, and
+        # with it the evidence that merely restated the name.
+        for sid in [s for s in self.systems if s not in self.established]:
+            del self.systems[sid]
+        for system in self.systems.values():
+            system.evidence = [e for e in system.evidence if not e.note] or system.evidence
         systems = list(self.systems.values())
         # A host that merely restates an already-detected system (api.stripe.com
         # next to "Stripe") would double count it.
