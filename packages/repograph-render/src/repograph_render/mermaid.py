@@ -11,6 +11,8 @@ from typing import Dict, List, Optional
 
 from repograph_core.model import App, Flow, ScanResult
 
+from . import relevance
+
 _ID_RE = re.compile(r"[^A-Za-z0-9_]")
 # Words Mermaid parses as syntax; a node called "end" silently closes a subgraph.
 _RESERVED = {"end", "graph", "subgraph", "class", "classDef", "click", "style", "direction",
@@ -275,22 +277,29 @@ def severity_pie(result: ScanResult) -> Optional[str]:
 
 def build_all(result: ScanResult, max_flows: int = 14) -> Dict[str, str]:
     out: Dict[str, str] = {
-        "c4-context": c4_context(result),
-        "c4-container": c4_container(result),
-        "dependency-graph": dependency_graph(result),
-        "application-dependencies": app_dependencies(result),
         "mindmap": repo_mindmap(result),
         "languages-pie": language_pie(result),
     }
+    if relevance.wants(result, "c4-context"):
+        out["c4-context"] = c4_context(result)
+    if relevance.wants(result, "c4-container"):
+        out["c4-container"] = c4_container(result)
+    if relevance.wants(result, "dependency-graph"):
+        out["dependency-graph"] = dependency_graph(result)
+        out["application-dependencies"] = app_dependencies(result)
     severity = severity_pie(result)
     if severity:
         out["findings-pie"] = severity
-    er = entity_relationship(result)
-    if er:
-        out["entity-relationship"] = er
-    for app in result.apps:
-        out[f"c4-component-{app.id}"] = c4_component(result, app)
-    for flow in result.flows[:max_flows]:
-        out[f"flow-{flow.id}"] = flowchart(flow)
-        out[f"sequence-{flow.id}"] = sequence_for_flow(flow)
+    if relevance.wants(result, "entity-relationship"):
+        er = entity_relationship(result)
+        if er:
+            out["entity-relationship"] = er
+    if relevance.wants(result, "c4-component"):
+        for app in result.apps:
+            out[f"c4-component-{app.id}"] = c4_component(result, app)
+    if relevance.wants(result, "flows"):
+        for flow in result.flows[:relevance.max_flows(result, max_flows)]:
+            out[f"flow-{flow.id}"] = flowchart(flow)
+            if relevance.wants(result, "sequence"):
+                out[f"sequence-{flow.id}"] = sequence_for_flow(flow)
     return out

@@ -6,6 +6,7 @@ import html
 import json
 from typing import Dict, Iterable, Optional, Sequence, Tuple
 
+from repograph_core import ask as ask_mod
 from repograph_core.model import ScanResult
 
 from . import charts, theme
@@ -92,12 +93,15 @@ def _graph_payload(result: ScanResult, max_nodes: int = 260) -> Dict[str, object
 
 def render(result: ScanResult, diagrams: Dict[str, str], mermaid: Dict[str, str],
            ai_report: str = "", output_files: Sequence[str] = (),
-           agent_panel: str = "") -> str:
+           agent_panel: str = "",
+           captions: Optional[Dict[str, Dict[str, str]]] = None) -> str:
+    captions = captions or {}
     meta = result.meta
     summary = result.summary
 
     tabs = [
-        ("overview", "Overview"), ("architecture", "Architecture"), ("graph2d", "Graph 2D"),
+        ("overview", "Overview"), ("technical", "Technical summary"),
+        ("architecture", "Architecture"), ("graph2d", "Graph 2D"),
         ("graph3d", "Graph 3D"), ("apps", "Applications"), ("flows", "Process flows"),
         ("endpoints", "APIs & endpoints"), ("dependencies", "Dependencies"),
         ("security", "Vulnerabilities"), ("integrations", "External systems"),
@@ -107,8 +111,9 @@ def render(result: ScanResult, diagrams: Dict[str, str], mermaid: Dict[str, str]
     nav = "".join(f'<button data-tab="{key}" role="tab">{e(label)}</button>' for key, label in tabs)
 
     sections = [
-        _overview(result),
-        _architecture(result, diagrams, mermaid),
+        _business_overview(result),
+        _technical_overview(result),
+        _architecture(result, diagrams, mermaid, captions=captions),
         _graph_section("graph2d", "Dependency graph (2D)",
                        "Drag to pan, scroll to zoom, click a node to isolate its neighbourhood.",
                        result, controls=True),
@@ -116,7 +121,7 @@ def render(result: ScanResult, diagrams: Dict[str, str], mermaid: Dict[str, str]
                        "Drag to orbit, scroll to zoom. Node size follows file count, colour follows type.",
                        result, controls=False),
         _apps(result, diagrams, mermaid),
-        _flows(result, diagrams, mermaid),
+        _flows(result, diagrams, mermaid, captions),
         _endpoints(result),
         _dependencies(result),
         _security(result),
@@ -156,7 +161,65 @@ passed. Every finding links to the file and line it came from.</footer>
 
 # ------------------------------------------------------------------ sections
 
-def _overview(result: ScanResult) -> str:
+def _points(items, open_first: bool = False) -> str:
+    """Plain sentence first, technical detail one click away."""
+    blocks = []
+    for index, point in enumerate(items or []):
+        detail = e(point.get("detail", ""))
+        evidence = " · ".join(e(x) for x in (point.get("evidence") or []))
+        extra = ""
+        if detail or evidence:
+            extra = (f'<details{" open" if open_first and index == 0 else ""}>'
+                     f'<summary>technical detail</summary>'
+                     f'<div class="small">{detail}</div>'
+                     + (f'<div class="where">{evidence}</div>' if evidence else "")
+                     + "</details>")
+        blocks.append(
+            f'<div class="point"><b>{e(point.get("title", ""))}</b>'
+            f'<div class="small">{e(point.get("plain", ""))}</div>{extra}</div>'
+        )
+    return "".join(blocks) or '<p class="muted small">Nothing to report here.</p>'
+
+
+def _business_overview(result: ScanResult) -> str:
+    business = result.business or {}
+    metrics = result.metrics
+    unknowns = business.get("unknowns") or []
+    unknown_html = ""
+    if unknowns:
+        items = "".join(f"<li>{e(u)}</li>" for u in unknowns)
+        unknown_html = (f'<div class="panel"><h3>What this report cannot tell you</h3>'
+                        f'<ul class="small">{items}</ul></div>')
+    ai_badge = ('<span class="tag">includes AI review</span>' if result.ai.present else "")
+    return f"""<section data-tab="overview" hidden>
+<h2>{e(business.get('headline', result.meta.repo_name))} {ai_badge}</h2>
+<p class="lede">{e(business.get('what_it_is', ''))}</p>
+<p class="small muted">{e(business.get('audience_note', ''))}</p>
+{_cards([
+    (f"{metrics.apps}", "Applications"),
+    (f"{metrics.endpoints}", "Ways in"),
+    (f"{metrics.external_systems}", "Systems it needs"),
+    (f"{sum(metrics.findings_by_severity.values())}", "Issues found"),
+])}
+<div class="grid2" style="margin-top:16px">
+  <div class="panel"><h3>What it lets people do</h3>{_points(business.get('capabilities'))}</div>
+  <div class="panel"><h3>Who uses it</h3>{_points(business.get('users'))}</div>
+</div>
+<div class="grid2">
+  <div class="panel"><h3>Where its data lives</h3>{_points(business.get('data'))}</div>
+  <div class="panel"><h3>What it depends on</h3>{_points(business.get('dependencies'))}</div>
+</div>
+<div class="grid2">
+  <div class="panel"><h3>How it runs</h3>{_points(business.get('operations'))}</div>
+  <div class="panel"><h3>How healthy it looks</h3>{_points(business.get('health'))}</div>
+</div>
+<h2>What could hurt</h2>
+<div class="panel">{_points(business.get('risks'), open_first=True)}</div>
+{unknown_html}
+</section>"""
+
+
+def _technical_overview(result: ScanResult) -> str:
     summary = result.summary
     metrics = result.metrics
     languages = charts.bar_chart(charts.fold_other(list(metrics.languages.items())),
@@ -183,8 +246,8 @@ def _overview(result: ScanResult) -> str:
         for f in top_findings
     ) or '<p class="muted">No critical or high severity findings.</p>'
 
-    return f"""<section data-tab="overview" hidden>
-<h2>What this repository is</h2>
+    return f"""<section data-tab="technical" hidden>
+<h2>Technical summary</h2>
 <p class="lede">{e(summary.get('purpose', ''))}</p>
 <div class="pill-row">
   <span class="tag">shape: {e(summary.get('shape', ''))}</span>
@@ -241,15 +304,30 @@ def _warnings(result: ScanResult) -> str:
     return f'<h2>Scan notes</h2><div class="panel"><ul class="small muted">{items}</ul></div>'
 
 
-def _diagram_block(name: str, svg: str, mermaid_source: str = "") -> str:
+def _diagram_block(title: str, svg: str, mermaid_source: str = "",
+                   caption: Optional[Dict[str, str]] = None, ai_caption: str = "") -> str:
     details = ""
     if mermaid_source:
         details = (f'<details><summary>Mermaid source — paste into any Markdown or AI tool</summary>'
                    f'<pre>{e(mermaid_source)}</pre></details>')
-    return f'<h3>{e(name)}</h3><div class="diagram">{svg}</div>{details}'
+    caption_html = ""
+    if caption and (caption.get("what") or caption.get("notice")):
+        notice = (f'<div class="small"><b>Notice:</b> {e(caption["notice"])}</div>'
+                  if caption.get("notice") else "")
+        caption_html = (f'<div class="panel" style="margin:0 0 10px">'
+                        f'<div class="small muted">{e(caption.get("what", ""))}</div>{notice}</div>')
+    ai_html = ""
+    if ai_caption:
+        ai_html = (f'<div class="panel" style="margin:0 0 10px"><span class="tag">AI generated'
+                   f'</span> <span class="small">{e(ai_caption)}</span></div>')
+    return (f'<h3>{e(title)}</h3>{caption_html}{ai_html}'
+            f'<div class="diagram">{svg}</div>{details}')
 
 
-def _architecture(result: ScanResult, diagrams: Dict[str, str], mermaid: Dict[str, str]) -> str:
+def _architecture(result: ScanResult, diagrams: Dict[str, str], mermaid: Dict[str, str],
+                  layouts: Optional[Dict[str, object]] = None,
+                  captions: Optional[Dict[str, Dict[str, str]]] = None) -> str:
+    captions = captions or {}
     blocks = []
     order = [
         ("c4-context", "C4 level 1 — system context"),
@@ -262,7 +340,9 @@ def _architecture(result: ScanResult, diagrams: Dict[str, str], mermaid: Dict[st
     ]
     for key, title in order:
         if key in diagrams:
-            blocks.append(_diagram_block(title, diagrams[key], mermaid.get(key, "")))
+            blocks.append(_diagram_block(title, diagrams[key], mermaid.get(key, ""),
+                                         captions.get(key),
+                                         result.ai.diagram_captions.get(key, "")))
     return f'<section data-tab="architecture" hidden><h2>Architecture views</h2>' \
            f'<p class="lede">Generated from the code itself: every box is a directory, package or ' \
            f'detected external system, and every arrow is an import, a call or a declared dependency.</p>' \
@@ -350,7 +430,9 @@ def _apps(result: ScanResult, diagrams: Dict[str, str], mermaid: Dict[str, str])
            f'{"".join(blocks)}</section>'
 
 
-def _flows(result: ScanResult, diagrams: Dict[str, str], mermaid: Dict[str, str]) -> str:
+def _flows(result: ScanResult, diagrams: Dict[str, str], mermaid: Dict[str, str],
+           captions: Optional[Dict[str, Dict[str, str]]] = None) -> str:
+    captions = captions or {}
     if not result.flows:
         return '<section data-tab="flows" hidden><h2>Process flows</h2>' \
                '<p class="muted">No entrypoints were found to build process flows from.</p></section>'
@@ -362,9 +444,17 @@ def _flows(result: ScanResult, diagrams: Dict[str, str], mermaid: Dict[str, str]
         extra = ""
         if seq:
             extra = f'<details><summary>Sequence diagram (Mermaid)</summary><pre>{e(seq)}</pre></details>'
+        caption = captions.get(f"flow-{flow.id}") or {}
+        notice = (f'<div class="small"><b>Notice:</b> {e(caption["notice"])}</div>'
+                  if caption.get("notice") else "")
+        narrative = (f'<div class="panel" style="margin:8px 0"><span class="tag">AI generated</span> '
+                     f'<span class="small">{e(flow.ai_narrative)}</span></div>'
+                     if flow.ai_narrative else "")
         blocks.append(f"""<div class="panel">
 <h3 style="color:var(--ink);text-transform:none;font-size:15px">{e(flow.name)}</h3>
 <p class="small muted">{e(flow.description)}</p>
+{notice}
+{narrative}
 <div class="diagram">{svg}</div>
 <details><summary>Mermaid flowchart source</summary><pre>{e(mmd)}</pre></details>
 {extra}</div>""")
@@ -614,6 +704,7 @@ def _ai(ai_report: str, output_files: Sequence[str], agent_panel: str,
 <p class="lede">Everything in this report was produced without a model. This tab is where AI is
 allowed in — on your terms.</p>
 {agent_panel}
+{_ask_panel(result)}
 {_ai_contributions(result)}
 <h2>Agent-readable report</h2>
 <p class="lede">The same analysis as a single dense Markdown document: paste it into any AI tool to
@@ -621,6 +712,23 @@ give it a full picture of this repository without letting it read the code.</p>
 <div class="panel"><h3>Files in this output folder</h3><ul class="small">{files}</ul></div>
 <pre>{e(ai_report)}</pre>
 </section>"""
+
+
+def _ask_panel(result: ScanResult) -> str:
+    """The follow-up questions worth asking once the report has been read."""
+    questions = ask_mod.suggestions(result)
+    if not questions:
+        return ""
+    items = "".join(f"<li>{e(q)}</li>" for q in questions)
+    return f"""<div class="panel">
+<h3 style="color:var(--ink);text-transform:none;font-size:15px">Ask a question about these results</h3>
+<p class="small">Once you have read this, the next questions are usually about what to do. Each of
+these was derived from what the scan found here:</p>
+<ol class="small">{items}</ol>
+<p class="small muted">Run <code>repograph ask "your question"</code> to build a prompt that hands
+your agent this report as context, or <code>repograph ask --suggest</code> to see this list in the
+terminal.</p>
+</div>"""
 
 
 def _ai_contributions(result: ScanResult) -> str:

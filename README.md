@@ -19,6 +19,36 @@ Every claim it makes points at the file and line it came from.
 
 ---
 
+## Two readers, one scan
+
+The first thing the report answers is **"what is this software for?"** — in plain language, with
+no jargon, for someone who does not read code. Every point expands into the technical detail and
+the `path:line` behind it, so the same page serves the person who signs off the work and the
+person who does it.
+
+![Plain-language overview](docs/images/business-overview.png)
+
+That page is also written out on its own as `BUSINESS-OVERVIEW.md`, and it leads the PDF and the
+slide deck.
+
+## It only builds what the repository warrants
+
+A repository of markdown guides does not need a C4 container diagram, a BPMN process or a slide
+deck, and producing them anyway is noise. repograph classifies the repository first — service,
+monorepo, library, front end, CLI, infrastructure, documentation — and then decides, per artifact,
+whether it is worth making. It reports every decision and its reason:
+
+```
+Not produced   these do not apply to this repository (use --everything to force them)
+  c4-context           a documentation repository has no runtime context to draw
+  deployment           no container or orchestration definitions were found
+  flows                no entrypoints were found to trace
+  workbook             there is nothing tabular to put in a workbook
+```
+
+`--everything` overrides it. `MANIFEST.json` records what was skipped so a pipeline can tell the
+difference between "nothing found" and "not looked for".
+
 ## Why
 
 Documentation rots. READMEs lie. The only thing that reliably describes a system is its code — but
@@ -152,6 +182,10 @@ open questions (each pointing at the few files worth opening), and writes a type
 `path:line` — and reports whatever it rejects. Model contributions appear in every report clearly
 labelled, never mixed with the scan's facts.
 
+The agent also writes the parts a scanner cannot phrase: a plain-language summary per
+application, a caption for each diagram, a narrative for each process, and a ranked view of the
+risks. Every one of them is labelled as model output.
+
 Run against the bundled example, an agent confirmed 5 findings and overturned 3 with cited
 reasoning — MD5 used for a non-security purpose, a `0.0.0.0` bind that only ever runs inside a
 container, and dead Dockerfile configuration the app never reads:
@@ -160,6 +194,20 @@ container, and dead Dockerfile configuration the app never reads:
 
 Its answers are checked in at `examples/agent-enrichment.example.json`, and the test suite
 re-merges them so the contract stays honest. See [docs/AI.md](docs/AI.md).
+
+## Then ask it things
+
+The report tells you what is there. The next question is usually what to do about it:
+
+```bash
+repograph ask --suggest                          # questions worth asking about this repo
+repograph ask "where would I add refunds?"       # builds the prompt, with the scan as context
+repograph ask "what breaks if Kafka is down?" --run claude
+```
+
+The prompt points the agent at the report before the code, so it answers from the map instead of
+grepping its way back to one. The suggested questions are generated from what the scan actually
+found — the busiest component, the shared dependency, the highest severity findings.
 
 ## Monorepos
 

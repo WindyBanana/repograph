@@ -14,7 +14,8 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple
 from . import apps as apps_mod
 from . import archimate as archimate_mod
 from . import c4 as c4_mod
-from . import gitinfo, graph
+from . import gitinfo, graph, narrative
+from . import profile as profile_mod
 from .flows import FlowBuilder
 from .infra import InfraScanner
 from .integrations import IntegrationScanner, classify_env_var
@@ -59,6 +60,7 @@ class ScanOptions:
     max_symbols: int = 20000
     max_files_recorded: int = 20000
     profile: str = "default"
+    everything: bool = False
     progress: Optional[ProgressFn] = None
 
     def notify(self, stage: str, done: int = 0, total: int = 0) -> None:
@@ -382,6 +384,8 @@ def scan(options: ScanOptions) -> ScanResult:
 
     result.summary = _summarise(result, ranks, fan_in, fan_out, readmes, unresolved_count,
                                 walker.stats.vendor_dirs)
+    result.profile = profile_mod.build_profile(result, force_all=options.everything).to_dict()
+    result.business = narrative.build(result).to_dict()
     options.notify("Done", total, total)
     return result
 

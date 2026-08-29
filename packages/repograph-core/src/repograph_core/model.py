@@ -135,6 +135,7 @@ class AiEnrichment:
     unanswered: List[str] = field(default_factory=list)
     rejected: List[str] = field(default_factory=list)
     answered_questions: int = 0
+    diagram_captions: Dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -396,6 +397,8 @@ class ScanResult:
     layers: Dict[str, int] = field(default_factory=dict)
     infrastructure: Dict[str, Any] = field(default_factory=dict)
     summary: Dict[str, Any] = field(default_factory=dict)
+    profile: Dict[str, Any] = field(default_factory=dict)
+    business: Dict[str, Any] = field(default_factory=dict)
     ai: AiEnrichment = field(default_factory=AiEnrichment)
 
     # -- convenience lookups -------------------------------------------------

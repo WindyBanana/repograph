@@ -2,6 +2,19 @@
 
 One scan writes one folder. Nothing outside it is touched.
 
+## What gets produced, and what does not
+
+repograph classifies the repository before it renders anything, and skips artifacts that would be
+empty or meaningless for that kind of repository. A documentation repository gets no container
+diagram; a single library gets no application landscape; a project with no entrypoints gets no
+process flows or BPMN.
+
+Every decision is recorded with its reason — in the terminal, in this folder's `README.md`, and
+under `not_applicable` in `MANIFEST.json`. That distinction matters in a pipeline: "we looked and
+found nothing" is not the same as "we did not look".
+
+Force the full set with `repograph scan . --everything`.
+
 | File | For | What it is |
 |---|---|---|
 | `index.html` | humans | The main report: overview, architecture views, 2D and 3D dependency graphs, applications, process flows, endpoints, dependencies, vulnerabilities, external systems, infrastructure, files. Self-contained — open it from disk, no server, no network. |
@@ -9,6 +22,7 @@ One scan writes one folder. Nothing outside it is touched.
 | `report.pdf` | print / review | Cover, executive summary, vector diagrams and paginated tables. |
 | `presentation.pptx` | meetings | Cover, summary, diagrams as editable shapes, tables, method and limits. |
 | `report.xlsx` | security / planning | Sheets: Summary, Findings (severity-coloured), Dependencies, Endpoints, External systems, Applications, Components, Dependency graph, Infrastructure, Configuration, Files. |
+| `BUSINESS-OVERVIEW.md` | non-technical readers | What the software is for, who uses it, what it depends on and what could hurt — in plain language, no jargon. |
 | `report.md` | wikis / PRs | Markdown with embedded Mermaid — renders on GitHub. |
 | `repograph.json` | tooling | The complete model. Feed it back with `repograph render`. |
 | `MANIFEST.json` | pipelines | Everything written plus headline numbers, easy to assert on in CI. |

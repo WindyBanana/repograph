@@ -10,6 +10,7 @@
 | `repograph summary [dir]` | Print the headline numbers of an existing scan |
 | `repograph agent [dir]` | Show (or run) the AI enrichment pass for a scan — see [AI.md](AI.md) |
 | `repograph enrich [dir]` | Validate an agent's answers, merge them and re-render |
+| `repograph ask [question]` | Ask an agent a question with the scan as context; `--suggest` lists good ones |
 | `repograph render <json>` | Re-render outputs from an existing `repograph.json` |
 
 ## scan
@@ -26,6 +27,7 @@ repograph scan [path]
   --no-gitignore          do not honour .gitignore
   --max-file-size BYTES   skip files larger than this (default 2 MB)
   --max-flows N           maximum process flows to render (default 14)
+  --everything            produce every artifact, even ones that do not apply to this repository
   --open                  open the HTML report when finished
   --json                  print the summary as JSON instead of text
   -q, --quiet             only print errors
@@ -54,6 +56,20 @@ repograph enrich [dir|enrichment.json]
   --no-render           merge into repograph.json without re-rendering
   --allow-unsupported   accept risks that carry no file:line evidence
 ```
+
+## ask
+
+```
+repograph ask "your question" [-o DIR]
+  --suggest        list questions worth asking about this repository, derived from the scan
+  --run TOOL       launch an agent CLI with the question
+  --yes            do not ask for confirmation before running it
+  --print-prompt   print the prompt to stdout and nothing else
+```
+
+The prompt it builds points the agent at `AI-REPORT.md` before the source, includes the headline
+facts inline, and asks for `path:line` citations. It is written to `agent/question.md` so you can
+pipe it anywhere.
 
 ## Terminal UI keys
 

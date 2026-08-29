@@ -129,10 +129,17 @@ The things static analysis cannot produce: intent, meaning, judgement and priori
 5. Run `repograph enrich {rel_out}` (or `./bin/repograph enrich {rel_out}`) to validate and merge
    your answers into every report.
 
+## What is most valuable
+
+In rough order: a judgement on the uncertain findings; a plain-language summary of each
+application that a non-engineer could read; one-sentence captions for the diagrams; and the
+ranked risks. The reports already contain the facts — do not restate them.
+
 ## Rules
 
-- **Cite or stay silent.** Every summary, risk and assessment needs `path:line` evidence from
-  this repository. Anything without evidence is rejected on merge.
+- **Cite or stay silent.** Every summary, risk and assessment needs evidence from this
+  repository, written as `path`, `path:line`, `path:start-end` or `path:12,48`. Anything without
+  evidence is rejected on merge.
 - **Do not guess.** If a question cannot be answered from the code, put its id in `unanswered`.
   That is a useful answer; an invented one is not.
 - **Use the ids you were given.** `enrichment-request.json` contains an `ids` map for

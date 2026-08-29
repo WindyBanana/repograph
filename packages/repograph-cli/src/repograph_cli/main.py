@@ -10,6 +10,7 @@ import sys
 import webbrowser
 from typing import List, Optional, Sequence
 
+from repograph_core import ask as ask_mod
 from repograph_core import enrich as enrich_mod
 from repograph_core.model import ScanResult
 from repograph_core.scan import VERSION, ScanOptions, scan
@@ -43,6 +44,8 @@ def build_parser() -> argparse.ArgumentParser:
   repograph agent ./repograph-out           show how to enrich the scan with an AI agent
   repograph agent ./repograph-out --run claude   run the agent for you
   repograph enrich ./repograph-out          merge an agent's answers back into the reports
+  repograph ask "where do I add refunds?"   ask an agent a question with the scan as context
+  repograph ask --suggest                   questions worth asking about this repository
   repograph tui                             browse the last scan in the terminal
   repograph serve ./repograph-out           serve the report over http
   repograph summary ./repograph-out         print the headline numbers again
@@ -69,6 +72,9 @@ def build_parser() -> argparse.ArgumentParser:
                              help="skip files larger than this (default: 2000000)")
     scan_parser.add_argument("--max-flows", type=int, default=14, metavar="N",
                              help="maximum process flows to render (default: 14)")
+    scan_parser.add_argument("--everything", action="store_true",
+                             help="produce every artifact even when it does not apply to this "
+                                  "repository (by default repograph skips what would be empty)")
     scan_parser.add_argument("--open", action="store_true", dest="open_report",
                              help="open the HTML report when finished")
     scan_parser.add_argument("--json", action="store_true", dest="json_out",
@@ -115,6 +121,19 @@ def build_parser() -> argparse.ArgumentParser:
     enrich_parser.add_argument("--allow-unsupported", action="store_true",
                                help="accept risks that carry no file:line evidence")
 
+    ask_parser = sub.add_parser(
+        "ask", help="ask an AI agent a question with this scan as context")
+    ask_parser.add_argument("question", nargs="*", help="your question, in plain words")
+    ask_parser.add_argument("-o", "--output", default="repograph-out", metavar="DIR",
+                            help="output folder from a previous scan")
+    ask_parser.add_argument("--suggest", action="store_true",
+                            help="list questions worth asking about this repository")
+    ask_parser.add_argument("--run", metavar="TOOL", default="",
+                            help="launch an agent CLI with the question")
+    ask_parser.add_argument("--yes", action="store_true", help="do not ask before running")
+    ask_parser.add_argument("--print-prompt", action="store_true",
+                            help="print the full prompt to stdout and nothing else")
+
     render_parser = sub.add_parser("render", help="re-render outputs from an existing repograph.json")
     render_parser.add_argument("json_path", help="path to repograph.json")
     render_parser.add_argument("-o", "--output", default="", help="output folder")
@@ -142,6 +161,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return cmd_agent(args)
     if args.command == "enrich":
         return cmd_enrich(args)
+    if args.command == "ask":
+        return cmd_ask(args)
     parser.print_help()
     return 1
 
@@ -188,6 +209,7 @@ def cmd_scan(args) -> int:
         extra_ignores=tuple(args.ignore),
         use_gitignore=not args.no_gitignore,
         git_history=not args.no_git,
+        everything=args.everything,
         progress=progress,
     )
     try:
@@ -231,9 +253,11 @@ def print_summary(console: Console, result: ScanResult, output_dir: str, rendere
     metrics = result.metrics
     summary = result.summary
 
+    profile = result.profile or {}
     console.rule(f"{result.meta.repo_name}")
     console.write(f"  {console.paint(str(summary.get('purpose', ''))[:180], 'white')}")
     console.write()
+    console.item("Reads as", str(profile.get("label", "software repository")))
     console.item("Shape", str(summary.get("shape", "unknown")))
     console.item("Architecture", ", ".join(summary.get("architecture_styles", [])) or "unclassified")
     console.item("Languages", ", ".join(summary.get("primary_languages", [])[:6]) or "unknown")
@@ -276,6 +300,18 @@ def print_summary(console: Console, result: ScanResult, output_dir: str, rendere
         for kind, names in sorted(by_kind.items()):
             console.item(kind, ", ".join(names[:6]) + (f" (+{len(names) - 6})" if len(names) > 6 else ""))
 
+    artifacts = (profile or {}).get("artifacts") or {}
+    not_produced = [(name, str(entry.get("reason", "")))
+                    for name, entry in sorted(artifacts.items())
+                    if isinstance(entry, dict) and not entry.get("include", True)]
+    if not_produced:
+        console.header("Not produced", "these do not apply to this repository "
+                                       "(use --everything to force them)")
+        for name, why in not_produced[:12]:
+            console.item(name, why or "not applicable")
+        if len(not_produced) > 12:
+            console.bullet(f"and {len(not_produced) - 12} more", "grey")
+
     if result.meta.warnings:
         console.header("Notes")
         for warning in result.meta.warnings:
@@ -286,11 +322,14 @@ def print_summary(console: Console, result: ScanResult, output_dir: str, rendere
     console.item("Agent report", os.path.join(output_dir, "AI-REPORT.md"))
     if os.path.exists(os.path.join(output_dir, "AGENT-INSTRUCTIONS.md")):
         console.item("Optional AI pass", f"repograph agent {output_dir}")
-    console.item("PDF / deck / workbook", "report.pdf · presentation.pptx · report.xlsx")
+    documents = [name for name in ("report.pdf", "presentation.pptx", "report.xlsx")
+                 if os.path.exists(os.path.join(output_dir, name))]
+    if documents:
+        console.item("Documents", " · ".join(documents))
     if rendered is not None:
         console.item("Files written", str(len(rendered.files)))
         for name, reason in (rendered.skipped or {}).items():
-            console.bullet(f"skipped {name}: {reason}", "yellow")
+            console.bullet(f"failed to write {name}: {reason}", "yellow")
     console.write()
 
 
@@ -505,6 +544,79 @@ def _merge(console: Console, output_dir: str, enrichment_file: str, formats: Seq
         console.item("Files written", str(len(rendered.files)))
     console.write()
     return 0
+
+
+def cmd_ask(args) -> int:
+    console = Console()
+    output_dir = _output_dir_of(args.output)
+    try:
+        result = load_result(output_dir)
+    except SystemExit as exc:
+        console.write(console.paint(str(exc), "red"))
+        return 2
+    repo_root = result.meta.root
+
+    if args.suggest or not args.question:
+        console.header(f"Questions worth asking about {result.meta.repo_name}",
+                       "each one is derived from what the scan actually found")
+        for index, question in enumerate(ask_mod.suggestions(result), start=1):
+            console.write(f"  {console.paint(str(index) + '.', 'grey')} {question}")
+        console.write()
+        example = f'repograph ask "…" -o {output_dir}'
+        console.write(f"  Ask one with:  {console.paint(example, 'cyan')}")
+        console.write()
+        return 0
+
+    question = " ".join(args.question).strip()
+    prompt = ask_mod.build_prompt(result, question, output_dir, repo_root)
+    if args.print_prompt:
+        print(prompt)
+        return 0
+
+    prompt_file = ask_mod.prompt_path(output_dir)
+    os.makedirs(os.path.dirname(prompt_file), exist_ok=True)
+    with open(prompt_file, "w", encoding="utf-8") as handle:
+        handle.write(prompt)
+
+    console.header("Question prepared", question)
+    console.item("Prompt", prompt_file)
+    console.write()
+    console.write("  It points the agent at the scan first, so it answers from the map rather")
+    console.write("  than reading the whole repository again.")
+
+    detected = agentpack.detect_tools()
+    console.header("Ask it from " + repo_root)
+    tools = detected or [(key, label, "") for key, (label, _e, _t) in
+                         sorted(agentpack.AGENT_TOOLS.items())]
+    for key, label, _path in tools:
+        command = agentpack.AGENT_TOOLS[key][2].format(
+            instructions=agentpack.display_path(prompt_file, repo_root))
+        console.write(f"  {console.paint(label.ljust(18), 'grey')} {console.paint(command, 'cyan')}")
+    console.write()
+
+    if not args.run:
+        return 0
+    key = args.run.lower()
+    if key not in agentpack.AGENT_TOOLS:
+        console.write(console.paint(f"unknown agent '{args.run}'", "red"))
+        return 2
+    if detected and not any(k == key for k, _, _ in detected):
+        console.write(console.paint(f"{agentpack.AGENT_TOOLS[key][0]} is not on PATH", "red"))
+        return 2
+    command = agentpack.AGENT_TOOLS[key][2].format(
+        instructions=agentpack.display_path(prompt_file, repo_root))
+    console.header("About to run", f"in {repo_root}")
+    console.write(f"  {console.paint(command, 'cyan')}")
+    if not args.yes:
+        try:
+            answer = input("  continue? [y/N] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            answer = ""
+        if answer not in ("y", "yes"):
+            console.write("  cancelled")
+            return 0
+    completed = subprocess.run(command, shell=True, cwd=repo_root, check=False)
+    return completed.returncode
 
 
 def cmd_render(args) -> int:

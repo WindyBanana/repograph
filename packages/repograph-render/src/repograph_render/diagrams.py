@@ -5,8 +5,9 @@ from __future__ import annotations
 from typing import Dict, List, Optional, Sequence
 
 from repograph_core.model import App, Flow, ScanResult
+from repograph_core.narrative import plural
 
-from . import theme
+from . import relevance, theme
 from .layout import (
     Diagram,
     Edge,
@@ -283,23 +284,131 @@ def layer_diagram(result: ScanResult, max_nodes: int = 60) -> Diagram:
     return diagram
 
 
+def describe(name: str, diagram: Diagram, result: ScanResult) -> Dict[str, str]:
+    """What a diagram shows, and the one thing worth noticing in it.
+
+    The "notice" line is computed from the same graph the diagram was drawn from,
+    so it points at something real rather than restating the caption.
+    """
+    metrics = result.metrics
+    edges = [e for e in result.edges if e.kind == "imports"]
+    fan_in: Dict[str, int] = {}
+    for edge in edges:
+        fan_in[edge.target] = fan_in.get(edge.target, 0) + 1
+    names = {c.id: c.name for c in result.components}
+
+    def busiest_component() -> str:
+        if not fan_in:
+            return ""
+        target, count = max(fan_in.items(), key=lambda kv: kv[1])
+        return (f"{names.get(target, target)} is depended on by "
+                f"{plural(count, 'other component')} — changes there reach furthest.")
+
+    def busiest_system() -> str:
+        systems = sorted(result.external_systems, key=lambda s: -len(s.apps))
+        if not systems or not systems[0].apps:
+            return ""
+        top = systems[0]
+        if len(top.apps) < 2:
+            return ""
+        return f"{top.name} is used by {len(top.apps)} of the {metrics.apps} applications, so an " \
+               f"outage there is felt in several places."
+
+    what, notice = "", ""
+    if name == "c4-context":
+        persons = sum(1 for el in result.c4.elements if el.level == "person")
+        what = (f"The whole repository as a single box, the {plural(persons, 'kind')} of user "
+                f"around it, and the {plural(metrics.external_systems, 'system')} outside it that "
+                f"it depends on. Read it to see what is outside your control.")
+        kinds = sorted({s.kind for s in result.external_systems})
+        notice = (f"The external systems fall into {len(kinds)} categories: {', '.join(kinds)}."
+                  if kinds else "Nothing external was detected — this repository stands alone.")
+    elif name == "c4-container":
+        what = (f"The {plural(metrics.apps, 'separately built or deployed piece')} of software "
+                f"and the stores and services each one talks to.")
+        notice = busiest_system() or "Each application has its own set of backing systems."
+    elif name.startswith("components-"):
+        app = next((a for a in result.apps if name.endswith(a.id)), None)
+        what = (f"Inside {app.name if app else 'one application'}: its components and the imports "
+                f"between them, plus the external systems it reaches.")
+        notice = (f"Its architecture reads as: {app.architecture_style}." if app else "")
+    elif name == "application-landscape":
+        what = ("Every application as a container, with its largest components inside, and the "
+                "dependencies that cross application boundaries.")
+        crossing = len([e for e in result.edges if e.kind == "depends"])
+        notice = (f"{plural(crossing, 'dependency', 'dependencies')} cross application "
+                  f"boundaries — those are the places a change in one app can break another."
+                  if crossing else "No application depends on another; they are independent.")
+    elif name == "dependency-graph":
+        what = (f"All {plural(len(diagram.nodes), 'component')} laid out by how they pull on "
+                f"each other. Bigger circles hold more files; thicker lines mean more imports.")
+        notice = busiest_component() or "No component dominates the graph."
+    elif name == "dependency-layers":
+        what = ("The same components stacked by depth: layer 0 depends on nothing else here, and "
+                "each layer above depends on the ones below.")
+        notice = (f"{plural(metrics.cycles, 'cycle')} found; a cycle means the layering is not "
+                  f"actually respected." if metrics.cycles
+                  else "No cycles: the dependencies form a clean hierarchy.")
+    elif name == "external-systems":
+        what = ("Every database, queue, store and third-party service this code refers to, "
+                "grouped by what it is for.")
+        notice = busiest_system() or "Each system is used by a single application."
+    elif name == "deployment":
+        infra = result.infrastructure or {}
+        what = (f"How this is packaged and run: "
+                f"{plural(len(infra.get('containers') or []), 'composed service')} and "
+                f"{plural(len(infra.get('kubernetes') or []), 'Kubernetes object')}.")
+        notice = "Arrows are declared start-up dependencies, not runtime traffic."
+    elif name.startswith("flow-"):
+        flow_id = name[len("flow-"):]
+        flow = result.flow_by_id(flow_id)
+        what = ("One process from its trigger to its end, with each step in the architectural "
+                "layer it belongs to.")
+        if flow is not None:
+            decisions = [n.label for n in flow.nodes if n.kind == "decision"]
+            stores = [n.label for n in flow.nodes if n.kind == "datastore"]
+            notice = ("The diamonds are guard clauses found in the entry file: "
+                      + "; ".join(decisions) + "." if decisions else
+                      "No guard clauses were found in the entry file — this path has no explicit "
+                      "validation or error handling.")
+            if stores:
+                notice += f" It reaches {', '.join(stores)}."
+    else:
+        what = diagram.subtitle
+    return {"what": what, "notice": notice}
+
+
 def build_all(result: ScanResult, max_flows: int = 14) -> Dict[str, Diagram]:
-    """Every diagram the reports and exports use, keyed by file-safe name."""
-    out: Dict[str, Diagram] = {
-        "c4-context": system_context(result),
-        "c4-container": container_diagram(result),
-        "dependency-graph": dependency_graph(result),
-        "application-landscape": app_landscape(result),
-        "external-systems": integration_map(result),
-        "dependency-layers": layer_diagram(result),
-    }
-    deployment = deployment_diagram(result)
-    if deployment is not None:
-        out["deployment"] = deployment
-    for app in result.apps:
-        diagram = component_diagram(result, app)
-        if diagram is not None:
-            out[f"components-{app.id}"] = diagram
-    for flow in result.flows[:max_flows]:
-        out[f"flow-{flow.id}"] = flow_diagram(flow)
+    """Every diagram this repository actually warrants, keyed by file-safe name.
+
+    A repository of markdown guides gets no container diagram; a single library
+    gets no application landscape. The scan decides (see repograph_core.profile)
+    and records why.
+    """
+    out: Dict[str, Diagram] = {}
+    builders = (
+        ("c4-context", lambda: system_context(result)),
+        ("c4-container", lambda: container_diagram(result)),
+        ("dependency-graph", lambda: dependency_graph(result)),
+        ("application-landscape", lambda: app_landscape(result)),
+        ("external-systems", lambda: integration_map(result)),
+        ("dependency-layers", lambda: layer_diagram(result)),
+        ("deployment", lambda: deployment_diagram(result)),
+    )
+    for name, builder in builders:
+        if not relevance.wants(result, name):
+            continue
+        diagram = builder()
+        if diagram is not None and diagram.nodes:
+            out[name] = diagram
+
+    if relevance.wants(result, "c4-component"):
+        for app in result.apps:
+            diagram = component_diagram(result, app)
+            if diagram is not None and diagram.nodes:
+                out[f"components-{app.id}"] = diagram
+
+    if relevance.wants(result, "flows"):
+        for flow in result.flows[:relevance.max_flows(result, max_flows)]:
+            out[f"flow-{flow.id}"] = flow_diagram(flow)
     return out

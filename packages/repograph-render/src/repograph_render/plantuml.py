@@ -7,6 +7,8 @@ from typing import Dict, List
 
 from repograph_core.model import App, Flow, ScanResult
 
+from . import relevance
+
 C4_INCLUDE = "!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/"
 ARCHIMATE_INCLUDE = "!include <archimate/Archimate>"
 
@@ -198,14 +200,18 @@ def activity(flow: Flow) -> str:
 
 
 def build_all(result: ScanResult, max_flows: int = 10) -> Dict[str, str]:
-    out = {
-        "c4-context": c4_context(result),
-        "c4-container": c4_container(result),
-        "components": component_view(result),
-        "archimate": archimate_view(result),
-    }
-    for app in result.apps:
-        out[f"c4-component-{app.id}"] = c4_component(result, app)
-    for flow in result.flows[:max_flows]:
-        out[f"activity-{flow.id}"] = activity(flow)
+    out: Dict[str, str] = {}
+    if relevance.wants(result, "c4-context"):
+        out["c4-context"] = c4_context(result)
+    if relevance.wants(result, "c4-container"):
+        out["c4-container"] = c4_container(result)
+    if relevance.wants(result, "c4-component"):
+        out["components"] = component_view(result)
+        for app in result.apps:
+            out[f"c4-component-{app.id}"] = c4_component(result, app)
+    if relevance.wants(result, "archimate"):
+        out["archimate"] = archimate_view(result)
+    if relevance.wants(result, "flows"):
+        for flow in result.flows[:relevance.max_flows(result, max_flows)]:
+            out[f"activity-{flow.id}"] = activity(flow)
     return out

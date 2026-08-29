@@ -7,7 +7,7 @@ from typing import Dict, List
 
 from repograph_core.model import ScanResult
 
-from . import theme
+from . import relevance, theme
 
 _ID = re.compile(r"[^A-Za-z0-9_]")
 
@@ -77,4 +77,9 @@ def landscape(result: ScanResult) -> str:
 
 
 def build_all(result: ScanResult) -> Dict[str, str]:
-    return {"components": components(result), "landscape": landscape(result)}
+    out: Dict[str, str] = {}
+    if relevance.wants(result, "dependency-graph"):
+        out["components"] = components(result)
+    if relevance.wants(result, "c4-container") or relevance.wants(result, "external-systems"):
+        out["landscape"] = landscape(result)
+    return out

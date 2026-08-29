@@ -64,6 +64,23 @@ You can also skip `repograph agent` entirely and tell your agent, in its own ses
 
 > Follow `repograph-out/AGENT-INSTRUCTIONS.md`.
 
+## Where the model's words appear
+
+Not as a wall of text at the end. The agent's contributions are threaded into the places they
+help, each one labelled:
+
+| Where | What the model adds |
+|---|---|
+| Overview | a plain-language summary of each application, next to the machine-derived one |
+| Architecture | a one-sentence caption per diagram, under the computed "what this shows / notice" line |
+| Process flows | a narrative for each reconstructed process |
+| Vulnerabilities | an assessment column: true positive, false positive or needs review, with reasoning |
+| Model contributions | the ranked risks and observations, with their evidence |
+
+The scan's own captions stay either way: every diagram already carries a computed description and
+a "notice" line derived from the graph (the component with the highest fan-in, whether the layering
+has cycles, which external system is shared between applications).
+
 ## What the agent is asked
 
 The questions are generated from the gaps the scanner *knows* it has, ranked so the valuable ones
@@ -111,6 +128,20 @@ Merged contributions never mix with scan facts:
 
 Delete `agent/enrichment.json` and re-run `repograph render` and you are back to a pure
 machine-derived report.
+
+## Asking follow-up questions
+
+Enrichment answers a fixed list. `repograph ask` is for everything after that:
+
+```bash
+repograph ask --suggest                       # questions derived from this scan
+repograph ask "where would I add refunds?"    # builds a prompt with the report as context
+repograph ask "..." --run claude              # and runs it
+```
+
+The generated prompt gives the agent the headline facts inline, points it at `AI-REPORT.md`,
+`repograph.json` and the CSVs, and tells it to cite `path:line` and to say when something is not
+determinable. It is written to `agent/question.md`, so it also works with tools that take a file.
 
 ## Cost and repeatability
 

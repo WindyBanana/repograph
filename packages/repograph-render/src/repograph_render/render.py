@@ -21,7 +21,9 @@ from . import (
     mermaid,
     pdfreport,
     plantuml,
+    relevance,
     report_ai,
+    report_business,
     report_html,
     report_md,
     svg,
@@ -40,7 +42,8 @@ ProgressFn = Callable[[str], None]
 class RenderResult:
     output_dir: str
     files: List[str] = field(default_factory=list)
-    skipped: Dict[str, str] = field(default_factory=dict)
+    skipped: Dict[str, str] = field(default_factory=dict)        # genuine failures
+    not_applicable: Dict[str, str] = field(default_factory=dict)  # deliberately not produced
     duration: float = 0.0
 
     def relative(self) -> List[str]:
@@ -65,6 +68,10 @@ def render_all(result: ScanResult, output_dir: str, formats: Sequence[str] = DEF
     def note(message: str) -> None:
         if progress:
             progress(message)
+
+    note("Deciding what this repository needs")
+    for name, why in relevance.skipped(result):
+        out.not_applicable[name] = why
 
     note("Laying out diagrams")
     layouts = diagram_mod.build_all(result, max_flows=max_flows)
@@ -92,12 +99,13 @@ def render_all(result: ScanResult, output_dir: str, formats: Sequence[str] = DEF
         for name, source in dot.build_all(result).items():
             _write(os.path.join(output_dir, "diagrams", "dot", f"{name}.dot"), source, out)
 
-    if "bpmn" in wanted and result.flows:
+    if "bpmn" in wanted and result.flows and relevance.wants(result, "bpmn"):
         note("Writing BPMN processes")
-        for name, source in bpmn.build_all(result.flows, max_flows=max_flows).items():
+        limit = relevance.max_flows(result, max_flows)
+        for name, source in bpmn.build_all(result.flows, max_flows=limit).items():
             _write(os.path.join(output_dir, "diagrams", "bpmn", f"{name}.bpmn"), source, out)
 
-    if "archimate" in wanted:
+    if "archimate" in wanted and relevance.wants(result, "archimate"):
         note("Writing ArchiMate model")
         _write(os.path.join(output_dir, "models", "archimate.xml"), archimate_xml.export(result), out)
 
@@ -110,6 +118,9 @@ def render_all(result: ScanResult, output_dir: str, formats: Sequence[str] = DEF
     if "markdown" in wanted:
         note("Writing Markdown report")
         _write(os.path.join(output_dir, "report.md"), report_md.render(result, mermaid_sources), out)
+        if relevance.wants(result, "business-overview"):
+            _write(os.path.join(output_dir, "BUSINESS-OVERVIEW.md"),
+                   report_business.render(result), out)
 
     if "json" in wanted:
         note("Writing JSON model")
@@ -125,7 +136,7 @@ def render_all(result: ScanResult, output_dir: str, formats: Sequence[str] = DEF
         note("Writing CSV exports")
         out.files.extend(csv_export.write_all(result, os.path.join(output_dir, "data")))
 
-    if "xlsx" in wanted:
+    if "xlsx" in wanted and relevance.wants(result, "workbook"):
         note("Writing Excel workbook")
         path = os.path.join(output_dir, "report.xlsx")
         try:
@@ -134,20 +145,24 @@ def render_all(result: ScanResult, output_dir: str, formats: Sequence[str] = DEF
         except Exception as exc:
             out.skipped["xlsx"] = f"{type(exc).__name__}: {exc}"
 
-    if "pptx" in wanted:
+    if "pptx" in wanted and relevance.wants(result, "deck"):
         note("Writing PowerPoint deck")
         path = os.path.join(output_dir, "presentation.pptx")
         try:
-            deck.build(result, layouts, path)
+            deck.build(result, layouts, path, captions={
+                name: diagram_mod.describe(name, diagram, result)
+                for name, diagram in layouts.items()})
             out.files.append(path)
         except Exception as exc:
             out.skipped["pptx"] = f"{type(exc).__name__}: {exc}"
 
-    if "pdf" in wanted:
+    if "pdf" in wanted and relevance.wants(result, "pdf"):
         note("Writing PDF report")
         path = os.path.join(output_dir, "report.pdf")
         try:
-            pdfreport.build(result, layouts, path)
+            pdfreport.build(result, layouts, path, captions={
+                name: diagram_mod.describe(name, diagram, result)
+                for name, diagram in layouts.items()})
             out.files.append(path)
         except Exception as exc:
             out.skipped["pdf"] = f"{type(exc).__name__}: {exc}"
@@ -162,9 +177,11 @@ def render_all(result: ScanResult, output_dir: str, formats: Sequence[str] = DEF
         listing = sorted(os.path.relpath(p, output_dir).replace(os.sep, "/") for p in out.files)
         agent_panel = agentpack.panel_html(result, output_dir, result.meta.root) \
             if "agent" in wanted else ""
+        captions = {name: diagram_mod.describe(name, diagram, result)
+                    for name, diagram in layouts.items()}
         _write(os.path.join(output_dir, "index.html"),
                report_html.render(result, svg_sources, mermaid_sources, ai_report, listing,
-                                  agent_panel=agent_panel), out)
+                                  agent_panel=agent_panel, captions=captions), out)
 
     _write(os.path.join(output_dir, "README.md"), _folder_readme(result, out), out)
     _write(os.path.join(output_dir, "MANIFEST.json"),
@@ -192,13 +209,22 @@ def _manifest(result: ScanResult, out: RenderResult) -> Dict[str, object]:
             "findings": result.metrics.findings_by_severity,
             "risk_level": result.summary.get("risk_level"),
         },
+        "profile": result.profile,
         "files": out.relative(),
         "skipped": out.skipped,
+        "not_applicable": out.not_applicable,
     }
 
 
 def _folder_readme(result: ScanResult, out: RenderResult) -> str:
     listing = out.relative()
+    profile_note = str((result.profile or {}).get("summary", "")) or "All artifacts were produced."
+    rows = relevance.skipped(result)
+    if rows:
+        skipped_table = ("| Not produced | Because |\n|---|---|\n"
+                         + "\n".join(f"| {name} | {why} |" for name, why in rows))
+    else:
+        skipped_table = "_Everything applicable to this repository was produced._"
     diagrams = [f for f in listing if f.startswith("diagrams/") and f.endswith(".svg")]
     advisory_note = (", advisories checked against OSV.dev" if result.meta.online
                      else ", offline (no advisory lookup)")
@@ -212,6 +238,7 @@ analysis — no AI, no code execution{advisory_note}.
 
 | If you are… | Open |
 |---|---|
+| a business reader | `BUSINESS-OVERVIEW.md`, or the Overview tab of `index.html` — plain language, no jargon |
 | a human wanting the full picture | `index.html` (interactive: 2D + 3D graph, all diagrams, sortable tables) |
 | an AI agent or a tool | `AI-REPORT.md` (dense, structured, every claim carries file:line) |
 | presenting to people | `presentation.pptx` or `report.pdf` |
@@ -227,6 +254,7 @@ analysis — no AI, no code execution{advisory_note}.
 - `presentation.pptx` — slide deck; diagrams are editable shapes, not images.
 - `report.xlsx` — workbook: findings, dependencies, endpoints, systems, components, edges, files.
 - `report.md` — Markdown report with embedded Mermaid diagrams (renders on GitHub).
+- `BUSINESS-OVERVIEW.md` — the same system explained without jargon, for non-technical readers.
 - `AI-REPORT.md` — the same analysis written for a model to read.
 - `repograph.json` — the full scan model (schema version {result.meta.schema_version}).
 - `MANIFEST.json` — what was written, plus headline numbers.
@@ -240,6 +268,12 @@ analysis — no AI, no code execution{advisory_note}.
 - `models/archimate.xml` — ArchiMate 3.1 Open Exchange model (import into Archi).
 - `AGENT-INSTRUCTIONS.md` + `agent/` — the optional AI layer: open a coding agent in the
   repository and point it at these to add intent, meaning and a judgement on each finding.
+
+## What was produced, and what was not
+
+{profile_note}
+
+{skipped_table}
 
 ## Headline numbers
 

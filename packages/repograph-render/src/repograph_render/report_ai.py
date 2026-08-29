@@ -74,6 +74,25 @@ git_branch: {result.git.branch or 'unknown'}
 git_commits: {result.git.commits} by {result.git.contributors} contributor(s)
 git_active_period: {result.git.first_commit} .. {result.git.last_commit}""")
 
+    business = result.business or {}
+    if business:
+        add(SECTION + "1b. PLAIN-LANGUAGE SUMMARY (for answering non-technical questions)")
+        add(f"headline: {business.get('headline', '')}\nwhat_it_is: {business.get('what_it_is', '')}")
+        for label, key in (("capabilities", "capabilities"), ("users", "users"),
+                           ("data_stores", "data"), ("depends_on", "dependencies"),
+                           ("operations", "operations"), ("risks", "risks"),
+                           ("health", "health")):
+            points = business.get(key) or []
+            if not points:
+                continue
+            add(f"\n{label}:")
+            add(_bullets(f"{p.get('title', '')}: {p.get('plain', '')}"
+                         + (f" [{p.get('detail')}]" if p.get("detail") else "")
+                         for p in points))
+        if business.get("unknowns"):
+            add("\nnot_determinable:")
+            add(_bullets(business["unknowns"]))
+
     add(SECTION + "2. APPLICATIONS (deployable or publishable units)")
     for app in result.apps:
         components = [c for c in result.components if c.app == app.id]
@@ -233,6 +252,20 @@ components:
     add("\nlargest files:")
     add(_bullets(f"{f.path} ({f.loc} LOC, {f.language})"
                  for f in sorted(result.files, key=lambda x: -x.loc)[:25]))
+
+    profile = result.profile or {}
+    if profile:
+        add(SECTION + "10b. WHAT WAS AND WAS NOT PRODUCED")
+        add(f"repository_reads_as: {profile.get('label', 'unknown')}")
+        add(f"classification_signals: {'; '.join(profile.get('signals', []))}")
+        not_applicable = [(name, entry.get("reason", ""))
+                          for name, entry in sorted((profile.get("artifacts") or {}).items())
+                          if isinstance(entry, dict) and not entry.get("include", True)]
+        if not_applicable:
+            add("deliberately_not_produced (do not treat these as gaps in the analysis):")
+            add(_bullets(f"{name}: {reason}" for name, reason in not_applicable))
+        else:
+            add("everything applicable to this repository was produced.")
 
     if include_mermaid:
         add(SECTION + "11. DIAGRAMS (Mermaid source — render or read directly)")

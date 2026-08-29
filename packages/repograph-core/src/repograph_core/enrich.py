@@ -62,6 +62,12 @@ def _files_for_app(result: ScanResult, app_id: str, limit: int = 6) -> List[str]
     return picks
 
 
+def _diagram_applies(result: ScanResult, name: str) -> bool:
+    artifacts = (result.profile or {}).get("artifacts") or {}
+    entry = artifacts.get(name)
+    return True if not isinstance(entry, dict) else bool(entry.get("include", True))
+
+
 def build_request(result: ScanResult, max_questions: int = 40) -> Dict[str, Any]:
     """The open questions this scan could not answer on its own."""
     questions: List[Dict[str, Any]] = []
@@ -147,6 +153,16 @@ def build_request(result: ScanResult, max_questions: int = 40) -> Dict[str, Any]
             "Unresolved imports mean missing edges in every dependency view.",
             [], priority=3)
 
+    for name in ("c4-context", "c4-container", "dependency-graph", "application-landscape",
+                 "external-systems", "deployment"):
+        if not _diagram_applies(result, name):
+            continue
+        ask(f"diagram-{name}", "diagram", name,
+            f"In one sentence a non-engineer could follow, what does the '{name}' diagram of this "
+            f"system show, and what should the reader take away from it?",
+            "A diagram without a caption makes the reader guess what they are looking at.",
+            ["AI-REPORT.md"], priority=4)
+
     ask("repo-risks", "repository", "",
         "What are the three biggest architectural or operational risks in this repository, "
         "and what would you fix first?",
@@ -192,6 +208,10 @@ def build_request(result: ScanResult, max_questions: int = 40) -> Dict[str, Any]
             "components": {c.id: c.name for c in result.components},
             "flows": {f.id: f.name for f in result.flows},
             "findings": {f.id: f.title for f in result.findings},
+            "diagrams": [name for name in
+                         ("c4-context", "c4-container", "dependency-graph",
+                          "application-landscape", "external-systems", "deployment")
+                         if _diagram_applies(result, name)],
         },
     }
 
@@ -226,7 +246,9 @@ def response_schema() -> Dict[str, Any]:
                         "summary": {"type": "string", "maxLength": 1200},
                         "responsibilities": {"type": "array", "items": {"type": "string"}},
                         "evidence": {"type": "array", "items": {"type": "string"},
-                                     "description": "path:line references supporting the summary"},
+                                     "description": "references supporting the summary: "
+                                                    "path, path:line, path:start-end or "
+                                                    "path:12,48"},
                     },
                 },
             },
@@ -264,6 +286,19 @@ def response_schema() -> Dict[str, Any]:
                         "assessment": {"enum": sorted(_VALID_ASSESSMENTS)},
                         "reasoning": {"type": "string", "maxLength": 1200},
                         "evidence": {"type": "array", "items": {"type": "string"}},
+                    },
+                },
+            },
+            "diagrams": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["id", "caption"],
+                    "properties": {
+                        "id": {"type": "string",
+                               "description": "a diagram name from ids.diagrams"},
+                        "caption": {"type": "string", "maxLength": 400,
+                                    "description": "one sentence a non-engineer could follow"},
                     },
                 },
             },
@@ -328,7 +363,9 @@ def example_enrichment() -> Dict[str, Any]:
 
 # ------------------------------------------------------------- the response
 
-_EVIDENCE_RE = re.compile(r"^[\w./\\-]+(?::\d+)?$")
+# path, path:line, path:start-end and path:12,48 are all valid citations — a
+# reviewer pointing at a block of code should not have to pick one line from it.
+_EVIDENCE_RE = re.compile(r"^[\w./\\@+-]+(?::\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*)?$")
 
 
 def _clean_evidence(values: Any, limit: int = 8) -> List[str]:
@@ -469,6 +506,19 @@ def apply(result: ScanResult, data: Dict[str, Any], *, require_evidence: bool = 
             targets=targets,
             evidence=evidence,
         ))
+        answered += 1
+
+    for entry in data.get("diagrams") or []:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("id", "")).strip()
+        caption = truncate(str(entry.get("caption", "")).strip(), 400)
+        if not name or not caption:
+            continue
+        if not _diagram_applies(result, name):
+            rejected.append(f"caption for diagram '{name}', which this scan did not produce")
+            continue
+        enrichment.diagram_captions[name] = caption
         answered += 1
 
     unanswered = data.get("unanswered")

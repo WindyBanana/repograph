@@ -50,6 +50,23 @@ def render(result: ScanResult, mermaid: Dict[str, str]) -> str:
         add(f"- **History:** {result.git.commits} commits by {result.git.contributors} "
             f"contributor(s), {result.git.first_commit} → {result.git.last_commit}\n")
 
+    business = result.business or {}
+    if business:
+        add("## 1b. In plain language\n")
+        add(f"{business.get('what_it_is', '')}\n")
+        for label, key in (("What it lets people do", "capabilities"),
+                           ("Where its data lives", "data"),
+                           ("What it depends on", "dependencies"),
+                           ("What could hurt", "risks")):
+            points = business.get(key) or []
+            if not points:
+                continue
+            add(f"**{label}**\n")
+            for point in points[:6]:
+                add(f"- **{point.get('title', '')}** — {point.get('plain', '')}")
+            add("")
+        add("_The full plain-language version is in `BUSINESS-OVERVIEW.md`._\n")
+
     add("## 2. Applications\n")
     add(_table(
         ["Application", "Kind", "Root", "Languages", "Frameworks", "Files", "LOC", "Style"],

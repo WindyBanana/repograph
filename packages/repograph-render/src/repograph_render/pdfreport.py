@@ -105,6 +105,55 @@ class ReportBuilder:
             y = page.paragraph(MARGIN + 110, y, page.width - MARGIN * 2 - 110, value, size=9.5)
             y += 6
 
+    def business_page(self) -> None:
+        """The page you can hand to someone who does not read code."""
+        business = self.result.business or {}
+        page = self._page(title="What this is",
+                          subtitle="In plain language, read out of the code itself")
+        y = self._content_top()
+        width = page.width - MARGIN * 2
+        y = page.paragraph(MARGIN, y, width, str(business.get("what_it_is", "")), size=11.5,
+                           max_lines=8)
+        y += 16
+
+        sections = [
+            ("What it lets people do", business.get("capabilities")),
+            ("Who uses it", business.get("users")),
+            ("Where its data lives", business.get("data")),
+            ("What it depends on", business.get("dependencies")),
+            ("How it runs", business.get("operations")),
+            ("What could hurt", business.get("risks")),
+            ("How healthy it looks", business.get("health")),
+        ]
+        for title, points in sections:
+            points = list(points or [])
+            if not points:
+                continue
+            if y > page.height - FOOT - 70:
+                page = self._page(title="What this is (continued)")
+                y = self._content_top()
+            page.text(MARGIN, y, title, size=11, bold=True)
+            y += 15
+            for point in points[:5]:
+                if y > page.height - FOOT - 34:
+                    page = self._page(title="What this is (continued)")
+                    y = self._content_top()
+                page.rect(MARGIN, y - 7, 2.5, 12, fill=theme.KINDS["app"][0])
+                page.text(MARGIN + 10, y, str(point.get("title", ""))[:90], size=9.5, bold=True)
+                y = page.paragraph(MARGIN + 10, y + 12, width - 10,
+                                   str(point.get("plain", "")), size=9, max_lines=4)
+                y += 10
+            y += 8
+
+        unknowns = business.get("unknowns") or []
+        if unknowns and y < page.height - FOOT - 60:
+            page.text(MARGIN, y, "What this report cannot tell you", size=11, bold=True)
+            y += 15
+            for item in unknowns[:5]:
+                y = page.paragraph(MARGIN + 10, y, width - 10, "— " + str(item), size=9,
+                                   colour=theme.MUTED, max_lines=3)
+                y += 6
+
     def summary_page(self) -> None:
         result = self.result
         page = self._page(title="Executive summary",
@@ -203,11 +252,20 @@ class ReportBuilder:
         return y + 8
 
     # ---------------------------------------------------------- diagrams
-    def diagram_page(self, diagram: Diagram) -> None:
+    def diagram_page(self, diagram: Diagram, caption: Optional[Dict[str, str]] = None) -> None:
         landscape = diagram.width >= diagram.height
         page = self._page(landscape=landscape, title=diagram.title[:70],
                           subtitle=diagram.subtitle[:120])
         top = self._content_top()
+        if caption and (caption.get("what") or caption.get("notice")):
+            top = page.paragraph(MARGIN, top - 4, page.width - MARGIN * 2,
+                                 str(caption.get("what", "")), size=9, colour=theme.MUTED,
+                                 max_lines=3)
+            if caption.get("notice"):
+                top = page.paragraph(MARGIN, top + 2, page.width - MARGIN * 2,
+                                     "Notice: " + str(caption["notice"]), size=9,
+                                     colour=theme.INK, max_lines=3)
+            top += 12
         available_w = page.width - MARGIN * 2
         available_h = page.height - top - FOOT
         scale = min(available_w / max(diagram.width, 1), available_h / max(diagram.height, 1), 1.6)
@@ -367,9 +425,13 @@ class ReportBuilder:
 
 
 def build(result: ScanResult, diagrams: Dict[str, Diagram], path: str,
-          max_diagrams: int = 24) -> None:
+          max_diagrams: int = 24, captions: Optional[Dict[str, Dict[str, str]]] = None) -> None:
+    captions = captions or {}
     builder = ReportBuilder(result, diagrams)
     builder.cover()
+    if (result.profile or {}).get("artifacts", {}).get(
+            "business-overview", {"include": True}).get("include", True):
+        builder.business_page()
     builder.summary_page()
 
     order = ["c4-context", "c4-container", "application-landscape", "dependency-layers",
@@ -377,15 +439,15 @@ def build(result: ScanResult, diagrams: Dict[str, Diagram], path: str,
     rendered = 0
     for key in order:
         if key in diagrams:
-            builder.diagram_page(diagrams[key])
+            builder.diagram_page(diagrams[key], caption=captions.get(key))
             rendered += 1
     for key, diagram in diagrams.items():
         if key.startswith("components-") and rendered < max_diagrams:
-            builder.diagram_page(diagram)
+            builder.diagram_page(diagram, caption=captions.get(key))
             rendered += 1
     for key, diagram in diagrams.items():
         if key.startswith("flow-") and rendered < max_diagrams:
-            builder.diagram_page(diagram)
+            builder.diagram_page(diagram, caption=captions.get(key))
             rendered += 1
 
     builder.table_pages(

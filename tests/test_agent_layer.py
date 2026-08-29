@@ -36,10 +36,20 @@ class TestRequest(unittest.TestCase):
     def test_every_target_id_is_real(self):
         known = ({a.id for a in self.result.apps} | {c.id for c in self.result.components}
                  | {f.id for f in self.result.flows} | {f.id for f in self.result.findings})
+        diagrams = set(self.request["ids"]["diagrams"])
         for question in self.request["questions"]:
             target = question["target"]
-            if target:
-                self.assertIn(target, known, f"question {question['id']} targets an unknown id")
+            if not target:
+                continue
+            pool = diagrams if question["kind"] == "diagram" else known
+            self.assertIn(target, pool, f"question {question['id']} targets an unknown id")
+
+    def test_diagram_questions_only_cover_diagrams_that_exist(self):
+        produced = set(self.request["ids"]["diagrams"])
+        artifacts = self.result.profile.get("artifacts", {})
+        for name in produced:
+            self.assertTrue(artifacts.get(name, {}).get("include", True),
+                            f"asked about {name}, which this scan does not produce")
 
     def test_id_map_is_published_for_the_agent(self):
         ids = self.request["ids"]
@@ -134,6 +144,16 @@ class TestMerge(unittest.TestCase):
             insights=[{"kind": "observation", "title": "Note",
                        "evidence": ["apps/api/app/db.py:14", "trust me", "https://example.com"]}]))
         self.assertEqual(enrichment.insights[0].evidence, ["apps/api/app/db.py:14"])
+
+    def test_line_ranges_and_lists_are_valid_citations(self):
+        """Real agents cite blocks, not single lines."""
+        enrichment, rejected = self.merge(self.base(
+            insights=[{"kind": "risk", "title": "Cited with a range",
+                       "evidence": ["apps/api/app/routers/orders.py:22-28",
+                                    "apps/api/app/services/order_service.py:16,42",
+                                    "apps/api/app/config.py"]}]))
+        self.assertEqual(rejected, [])
+        self.assertEqual(len(enrichment.insights[0].evidence), 3)
 
     def test_enrichment_survives_a_json_round_trip(self):
         self.merge(self.base(applications=[{"id": self.app.id, "summary": "Round trip."}]))

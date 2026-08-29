@@ -109,6 +109,11 @@ pre { background: var(--panel-2); border-radius: 8px; padding: 12px; overflow: a
 .right { text-align: right; }
 footer { color: var(--faint); font-size: 11.5px; padding: 30px 22px; text-align: center; }
 .pill-row { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0 2px; }
+.point { padding: 9px 0; border-bottom: 1px solid var(--grid); }
+.point:last-child { border-bottom: 0; }
+.point > b { font-size: 13.5px; }
+.point details { border: 0; background: transparent; padding: 4px 0 0; margin: 2px 0 0; }
+.point summary { font-size: 11.5px; }
 .kv { display: grid; grid-template-columns: 190px 1fr; gap: 4px 14px; font-size: 13px; }
 .kv dt { color: var(--muted); }
 .kv dd { margin: 0; }

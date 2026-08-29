@@ -98,7 +98,30 @@ def summary_slide(result: ScanResult) -> Slide:
     return slide
 
 
-def diagram_slide(diagram: Diagram, *, max_nodes: int = 34) -> Optional[Slide]:
+def business_slide(result: ScanResult) -> Slide:
+    """What this is, for the people in the room who do not write code."""
+    business = result.business or {}
+    slide = Slide()
+    _title(slide, "What this is", "In plain language, read out of the code itself")
+    slide.text(MARGIN, BODY_Y + 10, PAGE_W - MARGIN * 2, 60,
+               [(str(business.get("what_it_is", ""))[:400], 14, False, theme.INK)])
+
+    columns = [
+        ("What it lets people do", business.get("capabilities")),
+        ("What it depends on", (business.get("data") or []) + (business.get("dependencies") or [])),
+        ("What could hurt", business.get("risks")),
+    ]
+    width = (PAGE_W - MARGIN * 2 - 24) / 3
+    for index, (heading, points) in enumerate(columns):
+        x = MARGIN + index * (width + 12)
+        slide.text(x, BODY_Y + 96, width, 22, [(heading, 13, True, theme.INK)])
+        items = [f"{p.get('title', '')}: {p.get('plain', '')}"[:150] for p in (points or [])[:4]]
+        slide.bullets(x, BODY_Y + 124, width, 300, items or ["Nothing detected"], size=10.5)
+    return slide
+
+
+def diagram_slide(diagram: Diagram, *, max_nodes: int = 34,
+                  caption: Optional[Dict[str, str]] = None) -> Optional[Slide]:
     nodes = diagram.nodes[:max_nodes]
     if not nodes:
         return None
@@ -107,6 +130,10 @@ def diagram_slide(diagram: Diagram, *, max_nodes: int = 34) -> Optional[Slide]:
     _title(slide, diagram.title[:64], diagram.subtitle[:110])
 
     top = BODY_Y + 16
+    if caption and caption.get("notice"):
+        slide.text(MARGIN, BODY_Y - 2, PAGE_W - MARGIN * 2, 20,
+                   [(str(caption["notice"])[:170], 11, False, theme.MUTED)])
+        top += 18
     available_w = PAGE_W - MARGIN * 2
     available_h = PAGE_H - top - 40
     scale = min(available_w / max(diagram.width, 1), available_h / max(diagram.height, 1))
@@ -173,14 +200,20 @@ def table_slide(title: str, subtitle: str, headers: Sequence[str], rows: Sequenc
     return slide
 
 
-def build(result: ScanResult, diagrams: Dict[str, Diagram], path: str) -> None:
-    slides: List[Slide] = [cover(result), summary_slide(result)]
+def build(result: ScanResult, diagrams: Dict[str, Diagram], path: str,
+          captions: Optional[Dict[str, Dict[str, str]]] = None) -> None:
+    captions = captions or {}
+    slides: List[Slide] = [cover(result)]
+    if (result.profile or {}).get("artifacts", {}).get(
+            "business-overview", {"include": True}).get("include", True):
+        slides.append(business_slide(result))
+    slides.append(summary_slide(result))
 
     for key in ("c4-context", "c4-container", "application-landscape", "external-systems",
                 "deployment", "dependency-layers"):
         diagram = diagrams.get(key)
         if diagram is not None:
-            slide = diagram_slide(diagram)
+            slide = diagram_slide(diagram, caption=captions.get(key))
             if slide is not None:
                 slides.append(slide)
 
@@ -230,7 +263,7 @@ def build(result: ScanResult, diagrams: Dict[str, Diagram], path: str) -> None:
 
     flow_keys = [k for k in diagrams if k.startswith("flow-")][:3]
     for key in flow_keys:
-        slide = diagram_slide(diagrams[key])
+        slide = diagram_slide(diagrams[key], caption=captions.get(key))
         if slide is not None:
             slides.append(slide)
 
