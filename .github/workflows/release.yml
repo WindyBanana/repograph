@@ -99,17 +99,20 @@ jobs:
           cd dist
           case "${{ matrix.platform }}" in
             darwin)
-              zip -qry "../out/$NAME.zip" repograph repograph.app README.md LICENSE INSTALL.md install.sh
+              ARCHIVE="$NAME.zip"
+              zip -qry "../out/$ARCHIVE" repograph repograph.app README.md LICENSE INSTALL.md install.sh
               ;;
             win32)
-              7z a -tzip "../out/$NAME.zip" repograph.exe create-shortcut.vbs README.md LICENSE INSTALL.md install.ps1 > /dev/null
+              ARCHIVE="$NAME.zip"
+              7z a -tzip "../out/$ARCHIVE" repograph.exe create-shortcut.vbs README.md LICENSE INSTALL.md install.ps1 > /dev/null
               ;;
             *)
-              tar czf "../out/$NAME.tar.gz" repograph repograph.desktop repograph.svg README.md LICENSE INSTALL.md install.sh
+              ARCHIVE="$NAME.tar.gz"
+              tar czf "../out/$ARCHIVE" repograph repograph.desktop repograph.svg README.md LICENSE INSTALL.md install.sh
               ;;
           esac
           cd ../out
-          ARCHIVE=$(ls "$NAME".zip "$NAME".tar.gz 2>/dev/null | head -1)
+          test -s "$ARCHIVE"
           if command -v sha256sum > /dev/null 2>&1; then
             sha256sum "$ARCHIVE" > "$NAME.sha256"
           else
